@@ -36,7 +36,7 @@ fn run_command(mut command: Command, text: &str) -> Result<()> {
 /// and then keeps that mark on the clipboard as U+FEFF.
 #[cfg(target_os = "windows")]
 pub(super) fn set_unicode_text(text: &str) -> Result<()> {
-    use windows_sys::Win32::Foundation::{GetLastError, GlobalFree};
+    use windows_sys::Win32::Foundation::{GetLastError, GlobalFree, HWND};
     use windows_sys::Win32::System::DataExchange::{
         CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData,
     };
@@ -44,12 +44,48 @@ pub(super) fn set_unicode_text(text: &str) -> Result<()> {
         GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE,
     };
     use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, HWND_MESSAGE,
+    };
+
+    /// Message-only window that owns the clipboard while it is open:
+    /// `EmptyClipboard` after `OpenClipboard(NULL)` leaves the clipboard
+    /// without an owner, which the Win32 contract says makes
+    /// `SetClipboardData` fail.
+    struct OwnerWindow(HWND);
+    impl Drop for OwnerWindow {
+        fn drop(&mut self) {
+            // SAFETY: the handle came from CreateWindowExW on this thread
+            // and is destroyed exactly once.
+            unsafe { DestroyWindow(self.0) };
+        }
+    }
 
     let units = unicode_text_units(text);
+    let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
     // SAFETY: the allocation is sized for `units`, written only while locked,
     // and freed here unless SetClipboardData succeeded and the system owns it.
+    // The owner window outlives the open clipboard (dropped after Close).
     unsafe {
         let failed = |step: &str| anyhow!("{step} failed; GetLastError=0x{:08x}", GetLastError());
+        let hwnd = CreateWindowExW(
+            0,
+            class.as_ptr(),
+            std::ptr::null(),
+            0,
+            0,
+            0,
+            0,
+            0,
+            HWND_MESSAGE,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+        );
+        if hwnd.is_null() {
+            return Err(failed("CreateWindowExW"));
+        }
+        let owner = OwnerWindow(hwnd);
         let handle = GlobalAlloc(GMEM_MOVEABLE, std::mem::size_of_val(units.as_slice()));
         if handle.is_null() {
             return Err(failed("GlobalAlloc"));
@@ -64,13 +100,13 @@ pub(super) fn set_unicode_text(text: &str) -> Result<()> {
         GlobalUnlock(handle);
         // Another process (clipboard managers, RDP, the app being pasted into)
         // can hold the clipboard open briefly; retry for up to ~500 ms.
-        let mut opened = OpenClipboard(std::ptr::null_mut()) != 0;
+        let mut opened = OpenClipboard(owner.0) != 0;
         for _ in 0..25 {
             if opened {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
-            opened = OpenClipboard(std::ptr::null_mut()) != 0;
+            opened = OpenClipboard(owner.0) != 0;
         }
         if !opened {
             let error = failed("OpenClipboard");
@@ -88,6 +124,7 @@ pub(super) fn set_unicode_text(text: &str) -> Result<()> {
         if result.is_err() {
             GlobalFree(handle);
         }
+        drop(owner);
         result
     }
 }
