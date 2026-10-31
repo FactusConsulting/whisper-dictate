@@ -5,8 +5,9 @@ use std::os::windows::process::CommandExt;
 use std::process::{Child, Command};
 use std::ptr::{null, null_mut};
 use std::thread::JoinHandle;
+use std::time::{Duration, Instant};
 use windows_sys::Win32::Foundation::{
-    CloseHandle, ERROR_INVALID_PARAMETER, HANDLE, INVALID_HANDLE_VALUE, WAIT_OBJECT_0,
+    CloseHandle, ERROR_INVALID_PARAMETER, HANDLE, INVALID_HANDLE_VALUE, WAIT_FAILED, WAIT_TIMEOUT,
 };
 use windows_sys::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Thread32First, Thread32Next, TH32CS_SNAPTHREAD, THREADENTRY32,
@@ -19,8 +20,9 @@ use windows_sys::Win32::System::JobObjects::{
     JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
 };
 use windows_sys::Win32::System::Threading::{
-    OpenProcess, OpenThread, ResumeThread, WaitForSingleObject, CREATE_NO_WINDOW, CREATE_SUSPENDED,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, THREAD_SUSPEND_RESUME,
+    OpenProcess, OpenThread, ResumeThread, WaitForMultipleObjects, CREATE_NO_WINDOW,
+    CREATE_SUSPENDED, INFINITE, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    THREAD_SUSPEND_RESUME,
 };
 use windows_sys::Win32::System::IO::{CancelIoEx, CancelSynchronousIo};
 
@@ -103,14 +105,52 @@ fn resume_primary_thread(pid: u32) -> io::Result<()> {
     ))
 }
 
+/// Windows tears killed processes down asynchronously, and on a heavily
+/// loaded machine that has been observed to take longer than a second.
+const TERMINATION_GRACE: Duration = Duration::from_secs(5);
+/// `MAXIMUM_WAIT_OBJECTS` for `WaitForMultipleObjects`.
+const WAIT_BATCH: usize = 64;
+
 impl ProcessTree {
     pub(super) fn wait_terminated(&self) -> io::Result<()> {
+        self.wait_terminated_within(TERMINATION_GRACE)
+    }
+
+    fn wait_terminated_within(&self, grace: Duration) -> io::Result<()> {
         // Termination is asynchronous on Windows; closing the pipes alone
         // does not prove the descendants have finished exiting.
-        let started = std::time::Instant::now();
+        let deadline = Instant::now() + grace;
         if let Some(error) = &self.termination_error {
             return Err(io::Error::new(error.kind(), error.to_string()));
         }
+        // Retained handles cannot refer to a reused PID. Job accounting
+        // alone is not the process object's termination/signal barrier.
+        for batch in self.terminating_processes.chunks(WAIT_BATCH) {
+            let mut handles = [null_mut(); WAIT_BATCH];
+            for (slot, process) in handles.iter_mut().zip(batch) {
+                *slot = process.0;
+            }
+            loop {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                // Round up so a sub-millisecond remainder still blocks; a
+                // wait that times out early repeats until the deadline.
+                let millis = remaining
+                    .as_nanos()
+                    .div_ceil(1_000_000)
+                    .min(u128::from(INFINITE - 1)) as u32;
+                // SAFETY: each uniquely owned process handle has SYNCHRONIZE
+                // and stays alive for the call; the count matches the prefix.
+                match unsafe {
+                    WaitForMultipleObjects(batch.len() as u32, handles.as_ptr(), 1, millis)
+                } {
+                    WAIT_TIMEOUT if remaining.is_zero() => return Err(not_terminated()),
+                    WAIT_TIMEOUT => continue,
+                    WAIT_FAILED => return Err(io::Error::last_os_error()),
+                    _ => break,
+                }
+            }
+        }
+        // Accounting also covers processes created after the census.
         loop {
             let mut accounting: JOBOBJECT_BASIC_ACCOUNTING_INFORMATION =
                 unsafe { std::mem::zeroed() };
@@ -127,22 +167,13 @@ impl ProcessTree {
             {
                 return Err(io::Error::last_os_error());
             }
-            // Retained handles cannot refer to a reused PID. Job accounting
-            // alone is not the process object's termination/signal barrier.
-            let signaled = self.terminating_processes.iter().all(|process| {
-                // SAFETY: each uniquely owned process handle has SYNCHRONIZE.
-                unsafe { WaitForSingleObject(process.0, 0) == WAIT_OBJECT_0 }
-            });
-            if accounting.ActiveProcesses == 0 && signaled {
+            if accounting.ActiveProcesses == 0 {
                 return Ok(());
             }
-            if started.elapsed() >= std::time::Duration::from_secs(1) {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "helper descendants did not finish terminating",
-                ));
+            if Instant::now() >= deadline {
+                return Err(not_terminated());
             }
-            std::thread::sleep(std::time::Duration::from_millis(5));
+            std::thread::sleep(Duration::from_millis(5));
         }
     }
 
@@ -176,6 +207,13 @@ impl ProcessTree {
             }
         }
     }
+}
+
+fn not_terminated() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        "helper descendants did not finish terminating",
+    )
 }
 
 fn process_handles(job: HANDLE) -> io::Result<Vec<Handle>> {
@@ -285,3 +323,7 @@ mod tests {
         assert!(Handle::new(INVALID_HANDLE_VALUE).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "bounded_process_windows_tests.rs"]
+mod termination_tests;
