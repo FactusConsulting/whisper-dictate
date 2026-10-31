@@ -2,18 +2,19 @@
 //!
 //! The whole point of the module is a distinction that only shows up in the
 //! time domain — *no bytes for N seconds* must fail, *not finished within N
-//! seconds* must not — so these tests drive real threads against real
-//! deadlines. The stall cases use windows in the hundreds of milliseconds
-//! with one-sided upper bounds, so a loaded CI runner cannot flake them by
-//! being slow. The slow-but-progressing case cannot be one-sided, because a
-//! starved reader thread really does go silent: its gaps are a small fraction
-//! of a three-second window instead.
+//! seconds* must not. The idle-window decision is driven through a
+//! [`VirtualFeed`], whose clock only moves while the reader waits, so exact
+//! gaps on either side of the window cost no real time and cannot be skewed
+//! by a starved thread. One real-thread test keeps the production channel and
+//! `Instant` wiring honest, with a one-sided bound far above its window.
 //!
 //! Env-var parsing for `idle_timeout()` is covered in `model_manager_tests.rs`,
 //! which already owns the process-wide env lock and its guard.
 
 use super::*;
 use sha2::{Digest, Sha256};
+use std::cell::{Cell, RefCell};
+use std::collections::VecDeque;
 use std::io;
 use std::sync::mpsc;
 
@@ -43,25 +44,86 @@ impl io::Read for SilentAfterFirstChunk {
     }
 }
 
-/// Reader that delivers many small chunks with a pause between each — a
-/// legitimately slow link. Every pause is shorter than the idle window, but
-/// the transfer as a whole takes longer than a window to finish.
-struct SlowButProgressing {
-    chunks: std::vec::IntoIter<Vec<u8>>,
-    gap: Duration,
+/// Virtual silence after which a [`VirtualFeed`] declares the reader hung. Far
+/// above every window these tests use, so only a reader that never aborts can
+/// reach it.
+const VIRTUAL_HORIZON: Duration = Duration::from_secs(3600);
+
+/// Chunk feed on a virtual clock: each scripted item arrives a fixed gap after
+/// the previous arrival, and time only advances while the reader waits in
+/// `recv_timeout`. Once the script runs out the feed either reports a clean
+/// end of stream or stays silent forever.
+struct VirtualFeed {
+    origin: Instant,
+    now: Cell<Duration>,
+    last_arrival: Cell<Duration>,
+    script: RefCell<VecDeque<(Duration, io::Result<Vec<u8>>)>>,
+    eof_after_script: bool,
+    cancel_at: Option<(Duration, DownloadCancellation)>,
+    recv_calls: Cell<usize>,
 }
 
-impl io::Read for SlowButProgressing {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        match self.chunks.next() {
-            Some(chunk) => {
-                std::thread::sleep(self.gap);
-                let n = buf.len().min(chunk.len());
-                buf[..n].copy_from_slice(&chunk[..n]);
-                Ok(n)
-            }
-            None => Ok(0),
+impl VirtualFeed {
+    fn new(script: Vec<(Duration, io::Result<Vec<u8>>)>, eof_after_script: bool) -> Self {
+        Self {
+            origin: Instant::now(),
+            now: Cell::new(Duration::ZERO),
+            last_arrival: Cell::new(Duration::ZERO),
+            script: RefCell::new(script.into()),
+            eof_after_script,
+            cancel_at: None,
+            recv_calls: Cell::new(0),
         }
+    }
+
+    /// Cancel `cancellation` once virtual time reaches `at`, the way the
+    /// Settings button does from another thread while the reader waits.
+    fn cancelling_at(mut self, at: Duration, cancellation: DownloadCancellation) -> Self {
+        self.cancel_at = Some((at, cancellation));
+        self
+    }
+
+    fn elapsed(&self) -> Duration {
+        self.now.get()
+    }
+}
+
+impl ChunkFeed for &VirtualFeed {
+    fn now(&self) -> Instant {
+        self.origin + self.now.get()
+    }
+
+    fn recv_timeout(
+        &self,
+        wait: Duration,
+    ) -> std::result::Result<io::Result<Vec<u8>>, RecvTimeoutError> {
+        self.recv_calls.set(self.recv_calls.get() + 1);
+        let now = self.now.get();
+        let mut script = self.script.borrow_mut();
+        let due = match script.front() {
+            Some((gap, _)) => Some(self.last_arrival.get() + *gap),
+            None if self.eof_after_script => return Err(RecvTimeoutError::Disconnected),
+            None => None,
+        };
+        if let Some(due) = due.filter(|due| *due <= now + wait) {
+            let at = due.max(now);
+            self.now.set(at);
+            self.last_arrival.set(at);
+            let (_, item) = script.pop_front().expect("front was just inspected");
+            return Ok(item);
+        }
+        let after = now + wait;
+        assert!(
+            after < VIRTUAL_HORIZON,
+            "the reader waited out {after:?} of virtual silence without aborting",
+        );
+        self.now.set(after);
+        if let Some((at, cancellation)) = &self.cancel_at {
+            if after >= *at {
+                cancellation.cancel();
+            }
+        }
+        Err(RecvTimeoutError::Timeout)
     }
 }
 
@@ -119,11 +181,12 @@ fn stalled_transfer_fails_within_the_idle_window_and_cleans_the_partial() {
         1,
         "the wrapper prefix and the inner message must not both say 'stalled': {msg}",
     );
-    // The real assertion: bounded by the idle window, NOT by the global
-    // 6-hour transfer budget. Generous upper bound so a loaded runner cannot
-    // flake it — the pre-fix behaviour was six hours, not two seconds.
+    // Bounded by the idle window, NOT by the 6-hour global transfer budget.
+    // The bound is far above the window because a loaded runner can pause
+    // this thread for seconds; exact window arithmetic is covered on the
+    // virtual clock.
     assert!(
-        elapsed < Duration::from_secs(5),
+        elapsed < Duration::from_secs(60),
         "stall must be detected within the idle window, took {elapsed:?}",
     );
     assert!(!target.exists(), "no target may be installed from a stall");
@@ -139,75 +202,108 @@ fn cancellation_stops_a_silent_transfer_without_waiting_for_the_idle_window() {
     let tmp = tempfile::tempdir().unwrap();
     let partial = tmp.path().join("model.bin.partial");
     let target = tmp.path().join("model.bin");
-    let (gate_tx, gate_rx) = mpsc::channel::<()>();
     let cancellation = DownloadCancellation::default();
-    let cancel_from_ui = cancellation.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(30));
-        cancel_from_ui.cancel();
-    });
-
-    let started = std::time::Instant::now();
-    let err = stream_download_with_idle_timeout(
-        SilentAfterFirstChunk {
-            prefix: b"the first few bytes arrive just fine".to_vec(),
-            served: false,
-            gate: gate_rx,
-        },
-        Duration::from_secs(30),
-        cancellation,
-        None,
-        DownloadTarget::new(&partial, &target, &"00".repeat(32)),
-        &(),
+    let cancel_at = Duration::from_millis(30);
+    let feed = VirtualFeed::new(
+        vec![(
+            Duration::ZERO,
+            Ok(b"the first few bytes arrive just fine".to_vec()),
+        )],
+        false,
     )
-    .expect_err("a cancellation request must stop the download");
+    .cancelling_at(cancel_at, cancellation.clone());
+    let mut chunks = ChunkReader::new(&feed, Duration::from_secs(30), cancellation);
+
+    let err = stream_download_to(&mut chunks, None, &partial, &target, &"00".repeat(32), &())
+        .expect_err("a cancellation request must stop the download");
 
     assert!(err.to_string().contains("download cancelled"), "{err}");
     assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "cancellation must not wait for the idle timeout"
+        feed.elapsed() <= cancel_at + CANCEL_POLL_INTERVAL,
+        "cancellation must be noticed within one poll interval, not after the \
+         idle window: noticed at {:?}",
+        feed.elapsed(),
     );
     assert!(!target.exists());
     assert!(!partial.exists());
-    drop(gate_tx);
 }
 
 #[test]
 fn slow_but_progressing_transfer_is_never_aborted_by_the_idle_window() {
-    // Regression guard for the tension described in #573: a naive
-    // `timeout_recv_body` short enough to catch a stall would kill this
-    // transfer. The download runs for longer than an idle window end to end,
-    // but never goes a whole window without progress.
+    // A per-transfer deadline short enough to catch a stall would kill this
+    // download: it spans dozens of idle windows end to end, but no single gap
+    // between chunks reaches the window.
     let tmp = tempfile::tempdir().unwrap();
     let partial = tmp.path().join("slow.bin.partial");
     let target = tmp.path().join("slow.bin");
+    let idle = Duration::from_secs(3);
+    let gap = idle - Duration::from_millis(1);
     let chunks: Vec<Vec<u8>> = (0..80u8).map(|i| vec![i; 1024]).collect();
     let payload: Vec<u8> = chunks.iter().flatten().copied().collect();
     let expected = sha256_hex(&payload);
-    let idle = Duration::from_secs(3);
-    let reader = SlowButProgressing {
-        chunks: chunks.into_iter(),
-        // 80 gaps of 50 ms ≥ 4 s total: longer than the idle window, while a
-        // starved reader would need to stall for over 2.9 s to trip it.
-        gap: Duration::from_millis(50),
-    };
+    let feed = VirtualFeed::new(
+        chunks.into_iter().map(|chunk| (gap, Ok(chunk))).collect(),
+        true,
+    );
+    let mut reader = ChunkReader::new(&feed, idle, DownloadCancellation::default());
 
-    stream_download_with_idle_timeout(
-        reader,
-        idle,
-        DownloadCancellation::default(),
-        None,
-        DownloadTarget::new(&partial, &target, &expected),
-        &(),
-    )
-    .expect("a slow but progressing transfer must complete");
+    stream_download_to(&mut reader, None, &partial, &target, &expected, &())
+        .expect("a slow but progressing transfer must complete");
 
+    assert_eq!(
+        feed.elapsed(),
+        gap * 80,
+        "the transfer must run its full virtual length",
+    );
+    assert!(
+        feed.elapsed() > idle * 50,
+        "the scenario must span many idle windows",
+    );
     assert_eq!(
         std::fs::read(&target).unwrap(),
         payload,
-        "every chunk must survive the channel hand-off in order",
+        "every chunk must survive the hand-off in order",
     );
     assert!(!partial.exists(), "partial must be renamed into place");
+}
+
+#[test]
+fn one_gap_longer_than_the_idle_window_aborts_measured_from_the_last_chunk() {
+    use std::io::Read as _;
+
+    let idle = Duration::from_secs(3);
+    let second = Duration::from_secs(1);
+    let feed = VirtualFeed::new(
+        vec![
+            (second, Ok(b"first".to_vec())),
+            (second, Ok(b"second".to_vec())),
+            (idle + second, Ok(b"too late".to_vec())),
+            (second, Ok(b"never read".to_vec())),
+        ],
+        true,
+    );
+    let mut reader = ChunkReader::new(&feed, idle, DownloadCancellation::default());
+
+    let mut received = Vec::new();
+    let mut buf = [0u8; 64];
+    let err = loop {
+        match reader.read(&mut buf) {
+            Ok(0) => panic!("a gap longer than the idle window must abort the transfer"),
+            Ok(n) => received.extend_from_slice(&buf[..n]),
+            Err(err) => break err,
+        }
+    };
+
+    assert!(is_stall(&err), "the abort must be our stall marker: {err}");
+    assert_eq!(
+        received, b"firstsecond",
+        "chunks before the long gap must be delivered"
+    );
+    assert_eq!(
+        feed.elapsed(),
+        second * 2 + idle,
+        "the window must run from the last chunk, not from the transfer start",
+    );
 }
 
 #[test]
@@ -355,22 +451,22 @@ fn chunk_reader_serves_a_chunk_across_several_short_reads() {
 #[test]
 fn chunk_reader_reports_eof_repeatedly_without_waiting_out_the_window() {
     // A caller that reads once more after EOF must get an immediate `Ok(0)`
-    // from the latched `finished` flag, not another full idle wait. With a
-    // 10-minute window an unlatched implementation would hang the suite.
+    // from the latched `finished` flag, not another wait on the feed.
     use std::io::Read as _;
 
-    let mut reader = ChunkReader::spawn(
-        io::Cursor::new(Vec::new()),
+    let feed = VirtualFeed::new(Vec::new(), true);
+    let mut reader = ChunkReader::new(
+        &feed,
         Duration::from_secs(600),
         DownloadCancellation::default(),
     );
     let mut buf = [0u8; 8];
-    let started = std::time::Instant::now();
     assert_eq!(reader.read(&mut buf).unwrap(), 0, "empty stream is EOF");
     assert_eq!(reader.read(&mut buf).unwrap(), 0, "EOF is sticky");
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "reads past EOF must not block on the idle window",
+    assert_eq!(
+        feed.recv_calls.get(),
+        1,
+        "reads past EOF must not wait on the feed again",
     );
 }
 
