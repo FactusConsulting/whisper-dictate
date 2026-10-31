@@ -216,7 +216,6 @@ fn dispatch(model_path: &Path, request: TranscribeRequest) -> Result<TranscribeR
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_env_lock::ENV_LOCK;
 
     /// Pick the env var `user_cache_dir` consults on the current platform.
     const CACHE_ENV_VAR: &str = if cfg!(windows) {
@@ -229,7 +228,7 @@ mod tests {
 
     #[test]
     fn resolve_model_path_errors_when_env_missing_and_no_cache() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let saved = env::var(MODEL_PATH_ENV).ok();
         env::remove_var(MODEL_PATH_ENV);
         // Pin cache to a non-existent dir so the cache fallback also finds nothing.
@@ -254,7 +253,7 @@ mod tests {
 
     #[test]
     fn resolve_model_path_errors_when_env_blank() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let saved = env::var(MODEL_PATH_ENV).ok();
         env::set_var(MODEL_PATH_ENV, "   ");
 
@@ -273,7 +272,7 @@ mod tests {
         // skipped; the function must NOT return a corrupt cached path.
         // After the fix, `is_downloaded` gates the fallback, so a file with
         // wrong content is skipped and the function errors (no valid model).
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let saved = env::var(MODEL_PATH_ENV).ok();
         env::remove_var(MODEL_PATH_ENV);
         let tmp = tempfile::tempdir().unwrap();
@@ -317,7 +316,7 @@ mod tests {
 
     #[test]
     fn resolve_model_path_returns_value_when_set() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let saved = env::var(MODEL_PATH_ENV).ok();
         env::set_var(MODEL_PATH_ENV, "/tmp/ggml-tiny.en.bin");
 

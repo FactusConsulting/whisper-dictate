@@ -496,9 +496,7 @@ mod tests {
     /// on `history_sink` pins the same contract on the history side.
     #[test]
     fn effective_metrics_settings_tilde_in_env_var_is_expanded() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&[
             "VOICEPI_CONFIG",
             JSON_OUTPUT_ENV,
@@ -533,9 +531,7 @@ mod tests {
     /// cannot be read` (same shape applies to the metrics sink).
     #[test]
     fn effective_metrics_resolution_reports_config_read_failure() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", JSON_OUTPUT_ENV, METRICS_JSONL_ENV]);
 
         let dir = tempfile::tempdir().unwrap();
@@ -563,9 +559,7 @@ mod tests {
     /// bubble an I/O error to the caller (the trait impl swallows it).
     #[test]
     fn reloading_metrics_sink_append_with_result_propagates_io_error() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", JSON_OUTPUT_ENV, METRICS_JSONL_ENV]);
 
         let dir = tempfile::tempdir().unwrap();
@@ -619,9 +613,7 @@ mod tests {
     ///             and config's path wins over env path.
     #[test]
     fn effective_metrics_settings_config_wins_over_env() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", JSON_OUTPUT_ENV, METRICS_JSONL_ENV]);
 
         let dir = tempfile::tempdir().unwrap();
@@ -654,9 +646,7 @@ mod tests {
     ///   want   -> Some(env path) because env beats the "unset" default
     #[test]
     fn effective_metrics_settings_env_wins_over_default() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", JSON_OUTPUT_ENV, METRICS_JSONL_ENV]);
 
         let dir = tempfile::tempdir().unwrap();
@@ -677,9 +667,7 @@ mod tests {
 
     #[test]
     fn explicit_metrics_path_clear_suppresses_ambient_self_test_write() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", JSON_OUTPUT_ENV, METRICS_JSONL_ENV]);
         let dir = tempfile::tempdir().unwrap();
         let cfg = dir.path().join("config.json");
@@ -701,9 +689,7 @@ mod tests {
     /// inert. sanity check.
     #[test]
     fn effective_metrics_settings_all_unset_yields_none() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", JSON_OUTPUT_ENV, METRICS_JSONL_ENV]);
 
         let dir = tempfile::tempdir().unwrap();
@@ -720,9 +706,7 @@ mod tests {
     /// on / off with no session rebuild.
     #[test]
     fn reloading_metrics_sink_picks_up_config_change_between_appends() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _snap = EnvSnapshot::new(&["VOICEPI_CONFIG", JSON_OUTPUT_ENV, METRICS_JSONL_ENV]);
 
         let dir = tempfile::tempdir().unwrap();

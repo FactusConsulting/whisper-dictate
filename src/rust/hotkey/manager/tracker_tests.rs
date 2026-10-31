@@ -19,7 +19,6 @@ use std::time::Instant;
 use crate::diag::{
     init_from_env, install_gui_diagnostic_log, reset_level_for_tests, LogLevel, LOG_ENV_VAR,
 };
-use crate::diag_test_lock::DIAG_WRITER_LOCK;
 use crate::hotkey::manager::tracker::{KeyTracker, RawKeyEvent, RawKeyKind};
 
 /// Serialise diag-mutation tests so parallel runs don't race the
@@ -28,9 +27,7 @@ use crate::hotkey::manager::tracker::{KeyTracker, RawKeyEvent, RawKeyKind};
 /// tests in `diag_tests.rs` (or any future module that installs a
 /// diagnostic writer).
 fn diag_test_lock() -> MutexGuard<'static, ()> {
-    DIAG_WRITER_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+    crate::diag_test_lock::lock_diag_writer()
 }
 
 fn press(name: &str) -> RawKeyEvent {
@@ -61,7 +58,7 @@ fn press(name: &str) -> RawKeyEvent {
 #[test]
 fn chord_trace_redacts_ordinary_typing_at_debug_level() {
     let _diag_lock = diag_test_lock();
-    let _env_guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let _env_guard = crate::test_env_lock::lock_env();
     let prev_env = std::env::var(LOG_ENV_VAR).ok();
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -132,7 +129,7 @@ fn chord_trace_preserves_ptt_eligible_names_at_debug_level() {
     // names MUST survive the redactor. A regression that redacted
     // EVERYTHING (over-broad predicate) would fail this test.
     let _diag_lock = diag_test_lock();
-    let _env_guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let _env_guard = crate::test_env_lock::lock_env();
     let prev_env = std::env::var(LOG_ENV_VAR).ok();
 
     let dir = tempfile::tempdir().expect("tempdir");

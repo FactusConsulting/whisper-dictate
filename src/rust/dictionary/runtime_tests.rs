@@ -70,9 +70,7 @@ impl Drop for EnvGuard {
 
 #[test]
 fn reloading_prompt_reports_the_budget_fitted_terms_it_uses() {
-    let _lock = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("dictionary.json");
     std::fs::write(&path, r#"{"terms":["Factus","Codex"]}"#).unwrap();
@@ -132,9 +130,7 @@ fn owned_dictionary_settings_reload_terms_and_replacements_without_process_env()
 
 #[test]
 fn explicit_dictionary_null_suppresses_ambient_terms_and_replacements() {
-    let _lock = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.json");
     let dictionary_path = dir.path().join("ambient-dictionary.json");
@@ -173,9 +169,7 @@ fn explicit_dictionary_null_suppresses_ambient_terms_and_replacements() {
 
 #[test]
 fn dictionary_management_clear_avoids_default_and_ambient_mutations() {
-    let _lock = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.json");
     let ambient_path = dir.path().join("ambient-dictionary.json");
@@ -211,9 +205,7 @@ fn dictionary_management_clear_avoids_default_and_ambient_mutations() {
 
 #[test]
 fn empty_shell_export_suppresses_default_terms_and_replacements() {
-    let _lock = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let missing_config = dir.path().join("missing-config.json");
     let config_root = dir.path().join("config-root");
@@ -251,9 +243,7 @@ fn empty_shell_export_suppresses_default_terms_and_replacements() {
 
 #[test]
 fn dictionary_management_uses_first_resolved_path_for_terms_and_replacements() {
-    let _lock = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.json");
     let first_path = dir.path().join("first.json");
@@ -339,9 +329,7 @@ fn prompt_source_resolver_uses_configured_fallback_and_preserves_explicitness() 
 
 #[test]
 fn dictionary_prompt_and_list_use_resolved_config_path_instead_of_ambient() {
-    let _lock = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config_path = dir.path().join("config.json");
     let configured_path = dir.path().join("configured.json");

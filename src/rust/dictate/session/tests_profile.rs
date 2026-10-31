@@ -443,9 +443,7 @@ mod backend_override_coverage {
         // backends that only record the settings they received; the
         // production impls each own the interior-mutability slot that
         // consumes those settings.
-        let guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let guard = crate::test_env_lock::lock_env();
         std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
 
         let transcribe = SnoopTranscribe::new();
@@ -576,9 +574,7 @@ mod backend_override_coverage {
         // backend can drop any per-utterance override it stashed for a
         // previous match. Without this a profile that fired for utterance N
         // would silently persist into N+1.
-        let guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let guard = crate::test_env_lock::lock_env();
         std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
 
         let transcribe = SnoopTranscribe::new();
@@ -665,9 +661,7 @@ fn numeric_profile_overrides_use_safe_defaults_instead_of_nan_or_unbounded_value
 #[test]
 fn linux_probe_returns_empty_under_pure_wayland_env() {
     use crate::platform::foreground_window::{ForegroundWindowProbe, SystemForegroundWindow};
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let prev_display = std::env::var_os("DISPLAY");
     let prev_wayland = std::env::var_os("WAYLAND_DISPLAY");
     std::env::remove_var("DISPLAY");

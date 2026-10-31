@@ -307,7 +307,7 @@ mod tests {
 
     #[test]
     fn standalone_command_hook_honors_configured_null_over_ambient_hook() {
-        let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env_lock::lock_env();
         let previous_config = env::var_os("VOICEPI_CONFIG");
         let previous_hook = env::var_os("VOICEPI_COMMAND_HOOK");
         let dir = tempfile::tempdir().unwrap();

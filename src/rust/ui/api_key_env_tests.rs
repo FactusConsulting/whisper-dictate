@@ -1,4 +1,4 @@
-use super::test_support::{EnvVarGuard, ENV_TEST_LOCK};
+use super::test_support::EnvVarGuard;
 use super::*;
 use std::env;
 
@@ -16,7 +16,7 @@ fn groq_post_model_picker_offers_only_supported_cleanup_models() {
 
 #[test]
 fn provider_api_key_can_load_from_environment_fallback() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let _stt = EnvVarGuard::remove("VOICEPI_STT_API_KEY");
     let _openai = EnvVarGuard::remove("OPENAI_API_KEY");
     let _groq = EnvVarGuard::set("GROQ_API_KEY", "groq-test-key");
@@ -39,7 +39,7 @@ fn provider_api_key_can_load_from_environment_fallback() {
 
 #[test]
 fn post_api_key_can_load_from_environment_fallback() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let _post = EnvVarGuard::remove("VOICEPI_POST_API_KEY");
     let _stt = EnvVarGuard::remove("VOICEPI_STT_API_KEY");
     let _openai = EnvVarGuard::remove("OPENAI_API_KEY");

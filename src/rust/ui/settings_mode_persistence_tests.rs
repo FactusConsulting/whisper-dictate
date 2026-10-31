@@ -3,12 +3,12 @@
 //! `settings_mode_tests.rs` (that file had grown to 563 lines)
 //! see its doc comment for the full module breakdown.
 
-use super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
+use super::test_support::{test_app, EnvVarGuard};
 use super::*;
 
 #[test]
 fn missing_config_key_loads_as_advanced() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     std::fs::write(&config, "{}").unwrap();
@@ -20,7 +20,7 @@ fn missing_config_key_loads_as_advanced() {
 
 #[test]
 fn toggling_settings_mode_persists_immediately_without_marking_settings_dirty() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
@@ -47,7 +47,7 @@ fn toggling_settings_mode_persists_immediately_without_marking_settings_dirty() 
 
 #[test]
 fn toggling_settings_mode_leaves_unrelated_pending_edits_uncommitted() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
@@ -188,7 +188,7 @@ fn hidden_pending_edit_keys_ignores_a_saved_post_api_key() {
 
 #[test]
 fn switching_to_simple_with_a_pending_post_api_key_edit_sets_no_status_hint() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
@@ -209,7 +209,7 @@ fn switching_to_simple_with_a_pending_post_api_key_edit_sets_no_status_hint() {
 
 #[test]
 fn switching_to_simple_with_a_hidden_pending_edit_sets_a_status_hint() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
@@ -228,7 +228,7 @@ fn switching_to_simple_with_a_hidden_pending_edit_sets_a_status_hint() {
 
 #[test]
 fn switching_to_simple_without_hidden_pending_edits_leaves_status_untouched() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
@@ -248,7 +248,7 @@ fn switching_to_simple_without_hidden_pending_edits_leaves_status_untouched() {
 /// any other key would be silently reverted.
 #[test]
 fn set_settings_mode_preserves_an_external_edit_to_another_key() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
@@ -287,7 +287,7 @@ fn set_settings_mode_preserves_an_external_edit_to_another_key() {
 /// its original keys plus `ui_settings_mode`, nothing else.
 #[test]
 fn set_settings_mode_does_not_materialize_defaults_into_a_sparse_config() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     std::fs::write(&config, r#"{"lang":"da"}"#).unwrap();
@@ -318,7 +318,7 @@ fn set_settings_mode_does_not_materialize_defaults_into_a_sparse_config() {
 /// materialized default snapshot.
 #[test]
 fn set_settings_mode_does_not_materialize_defaults_into_a_missing_config() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
@@ -346,7 +346,7 @@ fn set_settings_mode_does_not_materialize_defaults_into_a_missing_config() {
 /// byte-for-value, same as every other key.
 #[test]
 fn set_settings_mode_preserves_unknown_foreign_keys() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     std::fs::write(&config, r#"{"totally_unknown_future_key":"custom-value"}"#).unwrap();
@@ -374,7 +374,7 @@ fn set_settings_mode_preserves_unknown_foreign_keys() {
 /// actually persisted to disk.
 #[test]
 fn set_settings_mode_leaves_the_saved_snapshot_stale_when_the_write_fails() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     // A directory where the config file is expected forces the read/write to
     // fail with an IO error instead of succeeding.

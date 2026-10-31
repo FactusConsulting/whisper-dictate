@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::{effective_runtime_config, effective_runtime_env, runtime_settings, RuntimeSetting};
 use crate::config::io::{load_settings_from_path, save_settings_to_path, CONFIG_ENV};
-use crate::config::test_support::{restore_env, ENV_LOCK};
+use crate::config::test_support::restore_env;
 
 #[test]
 fn public_setup_metadata_api_is_populated() {
@@ -83,7 +83,7 @@ fn schema_marks_the_optional_string_settings_as_nullable() {
 
 #[test]
 fn explicit_null_restart_setting_suppresses_ambient_environment() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     std::fs::write(&path, r#"{"audio_device":null}"#).unwrap();
@@ -102,7 +102,7 @@ fn explicit_null_restart_setting_suppresses_ambient_environment() {
 
 #[test]
 fn worker_overrides_carry_explicit_clear_markers() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     std::fs::write(&path, r#"{"lang":null}"#).unwrap();
@@ -127,7 +127,7 @@ fn worker_overrides_carry_explicit_clear_markers() {
 
 #[test]
 fn effective_export_config_carries_explicit_clear_markers() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     std::fs::write(&path, r#"{"lang":null}"#).unwrap();
@@ -146,7 +146,7 @@ fn effective_export_config_carries_explicit_clear_markers() {
 
 #[test]
 fn empty_nullable_shell_value_stays_an_explicit_clear() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("missing-config.json");
 
@@ -180,7 +180,7 @@ fn empty_nullable_shell_value_stays_an_explicit_clear() {
 
 #[test]
 fn non_nullable_null_uses_ambient_then_schema_default() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     std::fs::write(&path, r#"{"key":null,"model":null}"#).unwrap();
@@ -206,7 +206,7 @@ fn non_nullable_null_uses_ambient_then_schema_default() {
 
 #[test]
 fn unrelated_save_keeps_ambient_language_effective() {
-    let _guard = ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     std::fs::write(&path, r#"{"ui_theme":"dark"}"#).unwrap();

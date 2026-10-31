@@ -109,13 +109,13 @@ pub fn handle_export(include_secrets: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::test_support::{restore_env, ENV_LOCK};
+    use crate::config::test_support::restore_env;
 
     #[cfg(windows)]
     #[test]
     fn setup_save_respects_a_locked_last_good_configuration() {
         use std::os::windows::fs::OpenOptionsExt;
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env_lock::lock_env();
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("config.json");
         std::fs::write(&path, br#"{"model":"last-good"}"#).unwrap();
@@ -136,7 +136,7 @@ mod tests {
 
     #[test]
     fn setup_writer_creates_a_valid_minimal_config() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env_lock::lock_env();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("nested").join("config.json");
         let old = std::env::var_os("VOICEPI_CONFIG");
@@ -157,7 +157,7 @@ mod tests {
 
     #[test]
     fn setup_round_trip_preserves_nullable_clear_as_json_null() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env_lock::lock_env();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         let old = std::env::var_os("VOICEPI_CONFIG");
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn setup_clear_token_writes_json_null_over_a_nonempty_value() {
-        let _guard = ENV_LOCK.lock().unwrap();
+        let _guard = crate::test_env_lock::lock_env();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.json");
         let old = std::env::var_os("VOICEPI_CONFIG");

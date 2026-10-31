@@ -2,7 +2,6 @@ use super::*;
 
 // ── spawn_download tests ──────────────────────────────────────────────────
 
-use crate::test_env_lock::ENV_LOCK;
 use std::ffi::OsString;
 
 /// Save/restore wrapper for env-var mutation in tests. Mirrors the pattern

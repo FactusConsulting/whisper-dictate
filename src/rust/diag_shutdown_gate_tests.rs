@@ -12,7 +12,6 @@ use crate::diag::{
     run_async_writer_loop, AsyncRecord, DropLedger,
 };
 use crate::diag_shutdown_gate::ShutdownGate;
-use crate::diag_test_lock::DIAG_WRITER_LOCK;
 use crate::diag_tests::scan_fn_body;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::sync_channel;
@@ -24,9 +23,7 @@ use std::time::{Duration, Instant};
 /// that overlap a timing assertion in a sibling test is how flakes are
 /// born.
 fn diag_test_lock() -> std::sync::MutexGuard<'static, ()> {
-    DIAG_WRITER_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+    crate::diag_test_lock::lock_diag_writer()
 }
 
 // -----------------------------------------------------------------------

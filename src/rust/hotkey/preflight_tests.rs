@@ -18,7 +18,7 @@ fn backend_requested_reads_env_var_truthy_rust_only() {
     // Hold the crate-wide env lock so we don't race other env-mutating
     // tests in the same binary — see crate::test_env_lock for the
     // soundness contract.
-    let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let prev = std::env::var("VOICEPI_HOTKEY_BACKEND").ok();
 
     std::env::remove_var("VOICEPI_HOTKEY_BACKEND");
@@ -61,7 +61,7 @@ fn backend_available_reflects_feature_gate() {
 #[test]
 #[cfg(not(feature = "rust-hotkeys"))]
 fn backend_available_is_false_on_stock_build_regardless_of_env() {
-    let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     let prev = std::env::var("VOICEPI_HOTKEY_BACKEND").ok();
 
     std::env::set_var("VOICEPI_HOTKEY_BACKEND", "rust");

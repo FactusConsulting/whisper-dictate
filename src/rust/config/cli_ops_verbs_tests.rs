@@ -4,7 +4,6 @@
 
 use super::*;
 use crate::config::io::CONFIG_ENV;
-use crate::config::test_support::ENV_LOCK;
 
 fn scratch(tempdir: &tempfile::TempDir) -> PathBuf {
     tempdir.path().join("config.json")
@@ -255,7 +254,7 @@ fn dispatch_get_and_set_via_handle_command_roundtrips() {
     use crate::cli::ConfigCommand;
     use crate::config::handle_command;
 
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let prev = std::env::var_os(CONFIG_ENV);
     std::env::remove_var(CONFIG_ENV);
 

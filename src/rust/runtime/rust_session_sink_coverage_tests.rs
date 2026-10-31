@@ -73,9 +73,7 @@ fn signaling_sink_fixture() -> (
     Arc<Mutex<Vec<u64>>>,
     impl FnMut(CoordinatorAction) + Send + 'static,
 ) {
-    let env_lock_guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let env_lock_guard = crate::test_env_lock::lock_env();
     // EnvVarGuard saves the pre-fixture value and restores it on drop;
     // critical because the test binary is one process and a leaked
     // worker-events gate would silently change the behavior of every

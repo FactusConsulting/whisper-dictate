@@ -94,7 +94,6 @@ pub(crate) mod test_support {
         feature = "rust-injection"
     ))]
     pub(crate) use super::io::CONFIG_ENV;
-    pub(crate) use crate::test_env_lock::ENV_LOCK;
 
     /// Restore (or clear) an env var captured before a test mutated it.
     pub(crate) fn restore_env(name: &str, value: Option<std::ffi::OsString>) {

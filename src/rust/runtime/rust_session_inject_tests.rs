@@ -30,7 +30,6 @@ use crate::injection::enigo_backend::InjectorBackend;
 use crate::injection::paste::Clipboard;
 use crate::injection::{InjectMethod, Injector, PasteShortcut};
 use crate::platform::foreground_window::WindowInfo;
-use crate::test_env_lock::ENV_LOCK;
 
 /// Minimal recording backend for the profile-paste regression test:
 /// captures the sequence of `type_text` / `key_chord`
@@ -340,7 +339,7 @@ fn print_variant_does_not_invoke_any_backend() {
 
 #[test]
 fn from_env_print_value_selects_print_branch() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let prev = std::env::var(INJECT_MODE_ENV).ok();
     std::env::set_var(INJECT_MODE_ENV, "print");
     let backend = ProductionInjectBackend::from_env().expect("print needs no clipboard");

@@ -54,7 +54,7 @@ fn write_line_to_survives_a_failing_stderr_sink() {
     let _guard = diag_test_lock();
     // The `Off` level short-circuits `write_line` before the sink, so
     // make sure we're at a level that actually writes.
-    let _env_guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let _env_guard = crate::test_env_lock::lock_env();
     let prev_env = std::env::var(LOG_ENV_VAR).ok();
     std::env::set_var(LOG_ENV_VAR, "info");
     reset_level_for_tests();

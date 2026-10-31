@@ -128,7 +128,7 @@ fn install_is_a_noop_at_default_info_level() {
     // shell-set `VOICEPI_LOG=trace` (if any) into subsequent tests.
     // Ordering: reset_level_for_tests puts the atomic back to Info,
     // which is the release default — install() should refuse.
-    let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+    let _guard = crate::test_env_lock::lock_env();
     crate::diag::reset_level_for_tests();
 
     let installed = crate::hotkey::manager::win_raw_hook::install();

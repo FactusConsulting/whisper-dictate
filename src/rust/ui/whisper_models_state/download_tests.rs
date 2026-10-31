@@ -200,7 +200,7 @@ fn spawn_download_blocked_when_local_only() {
     // The VOICEPI_LOCAL_ONLY guard in spawn_download must abort before
     // touching the download state so no job slot is created and no thread
     // is spawned. Covers the new `is_local_only()` early-return branch.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let _guard = EnvVarGuard::set("VOICEPI_LOCAL_ONLY", "1");
     let state = WhisperModelDownloads::new();
     assert!(
@@ -217,7 +217,7 @@ fn spawn_download_blocked_when_local_only() {
 fn spawn_download_returns_false_for_unknown_model() {
     // Covers the `model_manager::find(name) == None` branch in
     // spawn_download: it must record a Failed job and return false.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let _guard = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
     let state = WhisperModelDownloads::new();
     assert!(
@@ -237,7 +237,7 @@ fn spawn_download_returns_false_for_unknown_model() {
 fn spawn_download_returns_false_when_already_in_progress() {
     // Pre-reserve the slot so `start()` refuses a second caller — the
     // guard in `spawn_download` must detect this and abort cleanly.
-    let _lock = ENV_LOCK.lock().expect("env lock poisoned");
+    let _lock = crate::test_env_lock::lock_env();
     let _guard = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
     let state = WhisperModelDownloads::new();
     state.start("tiny.en"); // reserves the slot

@@ -5,7 +5,6 @@
 
 use super::*;
 use crate::dictate::{TranscribeError, TranscribeResult};
-use crate::test_env_lock::ENV_LOCK;
 
 /// Canned transcribe backend returning a fixed transcript.
 struct StubTranscribe {
@@ -38,7 +37,7 @@ fn session_with(text: &'static str) -> DictateSession<StubTranscribe, CaptureInj
 fn drive_injects_transcribed_text_and_streams_events_when_gated() {
     // Worker events are gated behind VOICEPI_WORKER_EVENTS (so an ungated CLI
     // drive doesn't leak lines); serialise env access via ENV_LOCK.
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     std::env::set_var("VOICEPI_WORKER_EVENTS", "1");
     let mut session = session_with("hello world");
     let mut events = Vec::new();
@@ -64,7 +63,7 @@ fn drive_injects_transcribed_text_and_streams_events_when_gated() {
 fn drive_does_not_leak_events_without_the_gate() {
     // Regression guard: without VOICEPI_WORKER_EVENTS the drive must not
     // write any worker-event lines to the writer (still injects, though).
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     std::env::remove_var("VOICEPI_WORKER_EVENTS");
     let mut session = session_with("hello world");
     let mut events = Vec::new();
@@ -140,7 +139,7 @@ fn session_wiring_applies_reloading_replacements_to_the_injected_text() {
     // `prompt_and_replacements_reload_from_the_same_dictionary`. Driving BOTH
     // through one HTTP utterance would need a live/mock STT server, which the
     // `groq-cli-smoke.sh` integration covers.)
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let keys = [
         "VOICEPI_DICTIONARY",
         "VOICEPI_DICTIONARY_ENABLED",
@@ -281,7 +280,7 @@ fn resolve_cloud_transcribe_allows_loopback_under_local_only() {
 
 #[test]
 fn cloud_preview_materializes_nullable_model_and_prompt_clears() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let keys = [
         "VOICEPI_CONFIG",
         "VOICEPI_STT_MODEL",
@@ -330,7 +329,7 @@ fn handle_simulate_session_errors_without_cloud_config() {
     // Cover the CLI handler entry + error propagation deterministically: with
     // no cloud STT env configured, it must fail fast (before any decode
     // network) with the actionable message.
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     for key in [
         "VOICEPI_STT_MODEL",
         "VOICEPI_STT_API_KEY",
@@ -348,7 +347,7 @@ fn handle_simulate_session_errors_without_cloud_config() {
 
 #[test]
 fn config_reads_format_commands_from_env() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     std::env::set_var(FORMAT_COMMANDS_ENV, "en");
     assert_eq!(
         simulate_session_config().format_command_set.as_deref(),

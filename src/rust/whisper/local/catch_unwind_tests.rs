@@ -7,9 +7,7 @@ use std::path::PathBuf;
 /// signal.
 #[test]
 fn load_catch_unwind_missing_file_returns_errored() {
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let saved_gpu = std::env::var_os("VOICEPI_WHISPER_GPU");
     let saved_device = std::env::var_os("VOICEPI_DEVICE");
     std::env::remove_var("VOICEPI_WHISPER_GPU");

@@ -484,7 +484,7 @@ mod imp {
             // Other tests temporarily replace PATH with a fixture directory.
             // Read it under the same lock so this assertion sees the runner's
             // normal PATH rather than another test's transient override.
-            let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+            let _guard = crate::test_env_lock::lock_env();
             assert!(which("sh").is_some());
         }
 
@@ -508,7 +508,7 @@ mod imp {
         fn foreground_pid_skips_xdotool_for_wayland_with_xwayland_display() {
             use std::os::unix::fs::PermissionsExt;
 
-            let _guard = crate::test_env_lock::ENV_LOCK.lock().unwrap();
+            let _guard = crate::test_env_lock::lock_env();
             let names = ["XDG_SESSION_TYPE", "WAYLAND_DISPLAY", "DISPLAY", "PATH"];
             let previous = names.map(std::env::var_os);
             let tools = tempfile::tempdir().expect("temporary tool directory");

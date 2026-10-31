@@ -4,9 +4,7 @@ use super::tests_support::*;
 
 #[test]
 fn invalid_direct_session_recording_caps_fall_back_to_two_minutes() {
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _snapshot = EnvVarSnapshot::new(&["VOICEPI_MAX_RECORD_S"]);
     for invalid in ["-1", "NaN", "inf", "not-a-number"] {
         std::env::set_var("VOICEPI_MAX_RECORD_S", invalid);

@@ -46,9 +46,7 @@ impl Drop for EndToEndFixture {
 /// The in-process session must own the output decision explicitly, regardless
 /// of whether a test runner inherited the compatibility variable.
 fn e2e_fixture() -> EndToEndFixture {
-    let env_lock_guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let env_lock_guard = crate::test_env_lock::lock_env();
     let worker_events_before = std::env::var_os("VOICEPI_WORKER_EVENTS");
     EndToEndFixture {
         _env_lock_guard: env_lock_guard,
@@ -381,9 +379,7 @@ fn key_release_tail_keeps_accepting_audio_until_runtime_commit() {
         }
     }
 
-    let _env_lock = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+    let _env_lock = crate::test_env_lock::lock_env();
     let _restore_env = RestoreEnv(
         crate::config::effective_live_runtime_settings()
             .into_values()

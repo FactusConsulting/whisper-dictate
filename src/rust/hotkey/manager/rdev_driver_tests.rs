@@ -16,7 +16,6 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, MutexGuard};
 
-use crate::diag_test_lock::DIAG_WRITER_LOCK;
 use crate::hotkey::inject_guard::InjectionGuard;
 use crate::hotkey::manager::rdev_driver::{
     // Imports needed by the tests below:
@@ -76,7 +75,7 @@ use crate::hotkey::manager::tracker::RawKeyKind;
 /// into unrelated failures across the suite — same shape as the
 /// helpers in `diag_tests` and `tracker_tests`.
 fn diag_test_lock() -> MutexGuard<'static, ()> {
-    DIAG_WRITER_LOCK.lock().unwrap_or_else(|p| p.into_inner())
+    crate::diag_test_lock::lock_diag_writer()
 }
 
 #[path = "rdev_driver/keys_tests.rs"]

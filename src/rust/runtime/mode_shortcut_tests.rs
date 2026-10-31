@@ -2,7 +2,7 @@
 // read-modify-write the worker performs per press.
 
 use super::{resolve_post_mode, run, ModeRequest, RuntimeEvent, POST_MODE_CHOICES};
-use crate::config::test_support::{restore_env, CONFIG_ENV, ENV_LOCK};
+use crate::config::test_support::{restore_env, CONFIG_ENV};
 use crate::postprocess::POST_MODE_ENV;
 
 fn logged_mode_line(events: &[RuntimeEvent], expected: &str) -> bool {
@@ -58,7 +58,7 @@ fn raw_and_clean_requests_pin_their_mode() {
 
 #[test]
 fn cycle_request_persists_and_reports_the_new_mode() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let config_dir = tempfile::tempdir().unwrap();
     let config_path = config_dir.path().join("config.json");
     std::fs::write(&config_path, r#"{"post_mode": "clean"}"#).unwrap();
@@ -84,7 +84,7 @@ fn mode_press_writes_only_the_post_mode_key() {
     // materialize defaults into a sparse config.json and override the
     // environment fallbacks the user relies on. The worker must write
     // ONLY the post_mode key and leave every other key untouched.
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let config_dir = tempfile::tempdir().unwrap();
     let config_path = config_dir.path().join("config.json");
     std::fs::write(
@@ -119,7 +119,7 @@ fn raw_request_persists_raw_over_a_profile_value() {
     // The global post_mode is what the shortcut owns; per-window profile
     // overrides continue to win at dictation time, but the persisted
     // global value must reflect the press.
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let config_dir = tempfile::tempdir().unwrap();
     let config_path = config_dir.path().join("config.json");
     std::fs::write(&config_path, r#"{"post_mode": "bullets"}"#).unwrap();
@@ -143,7 +143,7 @@ fn cycle_starts_from_the_environment_provided_mode() {
     // no post_mode but VOICEPI_POST_MODE is set, the first press must
     // advance the mode the runtime is actually using (email -> bullets),
     // not the schema default.
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let config_dir = tempfile::tempdir().unwrap();
     let config_path = config_dir.path().join("config.json");
     std::fs::write(&config_path, r#"{"history_enabled": false}"#).unwrap();
@@ -167,7 +167,7 @@ fn cycle_starts_from_the_environment_provided_mode() {
 fn config_mode_wins_over_the_environment_mode() {
     // A config.json post_mode outranks VOICEPI_POST_MODE in the runtime
     // precedence, so the cycle starts from the config value.
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let config_dir = tempfile::tempdir().unwrap();
     let config_path = config_dir.path().join("config.json");
     std::fs::write(&config_path, r#"{"post_mode": "clean"}"#).unwrap();
@@ -197,7 +197,7 @@ fn cycle_normalizes_non_canonical_environment_modes() {
         (" raw ", "clean"),
     ] {
         let events = {
-            let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+            let _guard = crate::test_env_lock::lock_env();
             let config_dir = tempfile::tempdir().unwrap();
             let config_path = config_dir.path().join("config.json");
             std::fs::write(&config_path, r#"{}"#).unwrap();
@@ -219,7 +219,7 @@ fn cycle_normalizes_non_canonical_environment_modes() {
 
 #[test]
 fn clean_request_persists_clean() {
-    let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let config_dir = tempfile::tempdir().unwrap();
     let config_path = config_dir.path().join("config.json");
     std::fs::write(&config_path, r#"{"post_mode": "raw"}"#).unwrap();

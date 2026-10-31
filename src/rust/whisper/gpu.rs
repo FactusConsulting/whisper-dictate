@@ -180,7 +180,6 @@ pub fn should_use_gpu(policy: GpuPolicy) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_env_lock::ENV_LOCK;
 
     // -- pure parser ------------------------------------------------------
 
@@ -333,7 +332,7 @@ mod tests {
 
     #[test]
     fn parse_env_unset_means_auto() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _env = GpuEnvGuard::new();
         std::env::remove_var(GPU_ENV);
         std::env::remove_var(DEVICE_FALLBACK_ENV);
@@ -344,7 +343,7 @@ mod tests {
 
     #[test]
     fn parse_env_reads_value() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _env = GpuEnvGuard::new();
         std::env::set_var(GPU_ENV, "vulkan");
 
@@ -354,7 +353,7 @@ mod tests {
 
     #[test]
     fn parse_env_rejects_unknown_with_env_name_in_error() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _env = GpuEnvGuard::new();
         std::env::set_var(GPU_ENV, "tensorrt");
 
@@ -372,7 +371,7 @@ mod tests {
         // the long-standing "force CPU on local STT" knob, and a user that
         // sets it expects Rust transcribe on a Vulkan build to honour the
         // same intent rather than silently activating GPU via Auto.
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _env = GpuEnvGuard::new();
         std::env::remove_var(GPU_ENV);
         std::env::set_var(DEVICE_FALLBACK_ENV, "cpu");
@@ -382,7 +381,7 @@ mod tests {
 
     #[test]
     fn device_cpu_fallback_is_case_insensitive() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _env = GpuEnvGuard::new();
         std::env::remove_var(GPU_ENV);
         for value in ["CPU", "Cpu", "cPu", "  cpu  ", "\tCPU\n"] {
@@ -400,7 +399,7 @@ mod tests {
         // cuda/auto/<empty>/blank/unknown must NOT silently turn into Off;
         // they fall through to the default Auto so a user with
         // VOICEPI_DEVICE=cuda on a Vulkan build still gets GPU.
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _env = GpuEnvGuard::new();
         std::env::remove_var(GPU_ENV);
         for value in ["cuda", "CUDA", "auto", "Auto", "", "   ", "rocm", "gpu"] {
@@ -418,7 +417,7 @@ mod tests {
         // A user that has VOICEPI_DEVICE=cpu but explicitly opts into GPU
         // via VOICEPI_WHISPER_GPU=vulkan must get Vulkan — the more
         // specific knob wins. Symmetry: same for `auto` and `off`.
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _env = GpuEnvGuard::new();
         std::env::set_var(DEVICE_FALLBACK_ENV, "cpu");
 
@@ -434,7 +433,7 @@ mod tests {
 
     #[test]
     fn device_var_unset_and_gpu_unset_means_auto() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let _env = GpuEnvGuard::new();
         std::env::remove_var(GPU_ENV);
         std::env::remove_var(DEVICE_FALLBACK_ENV);

@@ -284,9 +284,7 @@ mod tests {
 
     #[test]
     fn self_test_exercises_done_when_it_is_the_only_enabled_event() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let vars = [
             ("VOICEPI_FEEDBACK_SOUNDS", "1"),
             ("VOICEPI_FEEDBACK_START", "0"),
@@ -337,9 +335,7 @@ mod tests {
 
     #[test]
     fn self_test_defaults_to_legacy_start_and_stop_sequence() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
         let names = [
             "VOICEPI_FEEDBACK_SOUNDS",
             "VOICEPI_FEEDBACK_START",

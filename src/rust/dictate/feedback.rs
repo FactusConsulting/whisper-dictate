@@ -478,9 +478,7 @@ mod tests {
     #[test]
     fn event_env_switches_have_backward_compatible_defaults() {
         let _guard = LOCAL_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _outer = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _outer = crate::test_env_lock::lock_env();
         let vars = [
             ("VOICEPI_FEEDBACK_START", true, "0"),
             ("VOICEPI_FEEDBACK_STOP", true, "false"),
@@ -507,9 +505,7 @@ mod tests {
     #[test]
     fn sounds_enabled_reflects_env_var() {
         let _guard = LOCAL_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _outer = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _outer = crate::test_env_lock::lock_env();
         let prior = std::env::var("VOICEPI_FEEDBACK_SOUNDS").ok();
         std::env::remove_var("VOICEPI_FEEDBACK_SOUNDS");
         assert!(!sounds_enabled(), "unset must be off");
@@ -532,9 +528,7 @@ mod tests {
         // panic and returns synchronously (the platform paths would
         // spawn a thread; the disabled path must not).
         let _guard = LOCAL_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let _outer = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
+        let _outer = crate::test_env_lock::lock_env();
         let prior = std::env::var("VOICEPI_FEEDBACK_SOUNDS").ok();
         std::env::remove_var("VOICEPI_FEEDBACK_SOUNDS");
         play_cue(CueKind::Start);

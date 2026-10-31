@@ -134,9 +134,7 @@ fn load_session_dictionary_reads_env_dictionary() {
     // Env-driven load: `VOICEPI_DICTIONARY` + `VOICEPI_DICTIONARY_ENABLED`
     // point at a temp file; the loaded terms + replacements come back on
     // the SessionDictionary. Serialised via the crate-wide ENV_LOCK.
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
 
     // Snapshot/restore every dictionary var (restore fires on drop), and
     // pin the budgets explicitly rather than inheriting them: an external
@@ -171,9 +169,7 @@ fn reloading_dictionary_picks_up_file_edits() {
     // call and reloads on a freshness/settings miss, so an edit to the
     // dictionary between utterances takes effect. The path is config-driven (the reload resolves
     // config-first), so no env dictionary vars are needed.
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _env = DictEnvGuard::new();
 
     let dir = tempfile::tempdir().unwrap();
@@ -206,9 +202,7 @@ fn reloading_dictionary_reflects_enabled_toggle() {
     // flips the cache key's `enabled` field, so the next `current` reloads
     // to an empty (passthrough) table -- the `dictionary_enabled` live
     // setting takes effect without an app restart, resolved config-first.
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _env = DictEnvGuard::new();
 
     let dir = tempfile::tempdir().unwrap();
@@ -236,9 +230,7 @@ fn reloading_dictionary_env_first_honours_env_path() {
     // + the groq-cli smoke) resolves the dictionary from the
     // `VOICEPI_DICTIONARY*` env the worker exports, so an env-set dictionary
     // applies its replacements regardless of config.json.
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _env = DictEnvGuard::new();
 
     let dir = tempfile::tempdir().unwrap();
@@ -261,9 +253,7 @@ fn reloading_dictionary_env_first_honours_env_path() {
 fn reloading_dictionary_reloads_terms_not_just_replacements() {
     // Term coverage: the reloaded table carries the file's `terms` too, and
     // a file edit updates them (not only the replacement map).
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _env = DictEnvGuard::new();
 
     let dir = tempfile::tempdir().unwrap();
@@ -296,9 +286,7 @@ fn reloading_dictionary_uses_readable_subset_on_partial_failure() {
     // Multiple configured files with one broken: the reload must keep the
     // readable subset's replacements rather than discarding everything, and
     // leave the key unadvanced so the broken file is retried.
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _env = DictEnvGuard::new();
 
     let dir = tempfile::tempdir().unwrap();
@@ -349,9 +337,7 @@ fn reloading_dictionary_clears_an_emptied_file_despite_broken_sibling() {
     // readable dictionary while a sibling is broken must clear its
     // replacements (a valid EMPTY subset is a successful load), not keep the
     // stale table because the merged result is now empty.
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _env = DictEnvGuard::new();
 
     let dir = tempfile::tempdir().unwrap();
@@ -386,9 +372,7 @@ fn reloading_dictionary_clears_an_emptied_file_despite_broken_sibling() {
 
 #[test]
 fn reloading_dictionary_prompt_and_terms_reload_together() {
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let _env = DictEnvGuard::new();
 
     let dir = tempfile::tempdir().unwrap();

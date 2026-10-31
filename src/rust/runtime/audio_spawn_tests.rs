@@ -3,7 +3,6 @@
 use crate::runtime::audio_spawn::{
     resolve_audio_device_from_env, resolved_audio_device, AUDIO_DEVICE_ENV,
 };
-use crate::test_env_lock::ENV_LOCK;
 use std::env;
 
 struct EnvGuard {
@@ -35,7 +34,7 @@ impl Drop for EnvGuard {
 
 #[test]
 fn resolved_audio_device_honours_voicepi_audio_device_env() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _g = EnvGuard::set(AUDIO_DEVICE_ENV, "Yeti X");
     // A user's saved mic choice applies to the native backend without a
     // second selector. Empty string (the unset case) means
@@ -45,7 +44,7 @@ fn resolved_audio_device_honours_voicepi_audio_device_env() {
 
 #[test]
 fn resolved_audio_device_defaults_to_empty_for_unset_env() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _g = EnvGuard::unset(AUDIO_DEVICE_ENV);
     assert!(
         resolved_audio_device().is_empty(),
@@ -57,7 +56,7 @@ fn resolved_audio_device_defaults_to_empty_for_unset_env() {
 /// rather than only from the parent process environment.
 #[test]
 fn resolve_audio_device_from_env_prefers_worker_command_env() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     // Even if the process env says something else (typical: shell
     // doesn't export it at all), the worker-command override wins.
     let _g = EnvGuard::set(AUDIO_DEVICE_ENV, "system-shell-mic");
@@ -70,7 +69,7 @@ fn resolve_audio_device_from_env_prefers_worker_command_env() {
 
 #[test]
 fn resolve_audio_device_from_env_falls_back_to_process_env() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     // No override in the command env → process env is the next-best
     // source so legacy shell-export workflows keep working.
     let _g = EnvGuard::set(AUDIO_DEVICE_ENV, "Process Env Mic");
@@ -83,7 +82,7 @@ fn resolve_audio_device_from_env_falls_back_to_process_env() {
 
 #[test]
 fn resolve_audio_device_from_env_returns_empty_when_neither_set() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _g = EnvGuard::unset(AUDIO_DEVICE_ENV);
     assert!(
         resolve_audio_device_from_env(&[]).is_empty(),
@@ -97,7 +96,7 @@ fn resolve_audio_device_from_env_returns_empty_when_neither_set() {
 /// either fail to match or are treated as a literal selector.
 #[test]
 fn resolve_audio_device_from_env_trims_whitespace_from_overrides() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _g = EnvGuard::unset(AUDIO_DEVICE_ENV);
     let overrides = vec![(AUDIO_DEVICE_ENV.to_owned(), "  Yeti X  ".to_owned())];
     assert_eq!(
@@ -109,7 +108,7 @@ fn resolve_audio_device_from_env_trims_whitespace_from_overrides() {
 
 #[test]
 fn resolve_audio_device_from_env_collapses_blank_override_to_empty() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _g = EnvGuard::unset(AUDIO_DEVICE_ENV);
     let overrides = vec![(AUDIO_DEVICE_ENV.to_owned(), "   ".to_owned())];
     assert_eq!(
@@ -121,7 +120,7 @@ fn resolve_audio_device_from_env_collapses_blank_override_to_empty() {
 
 #[test]
 fn resolve_audio_device_from_env_trims_process_env_fallback() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     // No worker-command override → process env is consulted, and it
     // must be trimmed the same way the override path is.
     let _g = EnvGuard::set(AUDIO_DEVICE_ENV, "\tHeadset Mic\n");
@@ -130,7 +129,7 @@ fn resolve_audio_device_from_env_trims_process_env_fallback() {
 
 #[test]
 fn resolve_audio_device_from_env_ignores_unrelated_overrides() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _g = EnvGuard::unset(AUDIO_DEVICE_ENV);
     let overrides = vec![
         ("VOICEPI_MODEL".to_owned(), "small".to_owned()),

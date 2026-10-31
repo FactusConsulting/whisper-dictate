@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::test_support::{restore_env, ENV_LOCK};
+use crate::config::test_support::restore_env;
 
 struct Fixture {
     _lock: std::sync::MutexGuard<'static, ()>,
@@ -8,7 +8,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
-        let lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let lock = crate::test_env_lock::lock_env();
         let dir = tempfile::tempdir().unwrap();
         let old = [
             "VOICEPI_CONFIG",

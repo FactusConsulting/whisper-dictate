@@ -81,9 +81,7 @@ fn every_native_start_failure_has_a_stable_diagnostic_stage() {
 #[cfg(not(feature = "whisper-rs-vulkan"))]
 #[test]
 fn gui_start_rejects_effective_vulkan_before_installing_runtime_resources() {
-    let _lock = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _device = super::test_support::EnvVarGuard::set("VOICEPI_DEVICE", "cpu");
     let _backend = super::test_support::EnvVarGuard::set("VOICEPI_STT_BACKEND", "whisper");
     let command = command(
@@ -260,9 +258,7 @@ fn teardown_task_never_blocks_the_controller_thread() {
 
 #[test]
 fn queued_restart_waits_for_teardown_completion_before_starting() {
-    let _lock = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _engine = super::test_support::EnvVarGuard::set(super::in_process::ENGINE_ENV, "rust");
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     let mut supervisor = RuntimeSupervisor::new();
@@ -296,9 +292,7 @@ fn restart_replaces_the_command_already_queued_behind_teardown() {
     // `restart` validates the process-wide engine selector while
     // materializing the replacement command. Serialize that read against
     // tests which temporarily set the retired selector.
-    let _lock = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let (_done_tx, done_rx) = std::sync::mpsc::channel();
     let mut supervisor = RuntimeSupervisor::new();
     supervisor.teardown_rx = Some(done_rx);
@@ -381,9 +375,7 @@ fn stop_rejects_events_from_the_previous_runtime_generation() {
 
 #[test]
 fn restart_rejects_events_from_the_previous_runtime_generation() {
-    let _lock = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _engine = super::test_support::EnvVarGuard::set(super::in_process::ENGINE_ENV, "rust");
     let (_done_tx, done_rx) = std::sync::mpsc::channel();
     let mut supervisor = RuntimeSupervisor::new();
@@ -464,9 +456,7 @@ fn terminal_native_exit_transitions_to_stopped_and_closes_gate() {
 #[cfg(all(windows, feature = "rust-hotkeys", feature = "rust-injection"))]
 #[test]
 fn windows_controller_stop_drops_listener_before_reporting_stopped() {
-    let _lock = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().expect("temp config dir");
     let config = dir.path().join("config.json");
     std::fs::write(&config, r#"{"key":"f9"}"#).expect("write config");
@@ -506,9 +496,7 @@ fn restart_path_rebuilds_instead_of_resuming_captured_dependencies() {
 
 #[test]
 fn failed_restart_never_restores_a_retired_runtime() {
-    let _lock = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _engine = super::test_support::EnvVarGuard::set(super::in_process::ENGINE_ENV, "python");
     let mut supervisor = RuntimeSupervisor::new();
     supervisor.state = super::RuntimeState::Running;

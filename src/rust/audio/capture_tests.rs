@@ -1,5 +1,4 @@
 use super::*;
-use crate::diag_test_lock::DIAG_WRITER_LOCK;
 use std::sync::mpsc as std_mpsc;
 use std::time::Duration;
 
@@ -8,9 +7,7 @@ use std::time::Duration;
 /// report must still return promptly and the line must reach the log file.
 #[test]
 fn xrun_report_reaches_the_diag_log_without_waiting_on_stderr() {
-    let _diag_lock = DIAG_WRITER_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+    let _diag_lock = crate::diag_test_lock::lock_diag_writer();
     crate::diag::reset_level_for_tests();
     let dir = tempfile::tempdir().expect("tempdir");
     let path = dir.path().join("xrun.log");

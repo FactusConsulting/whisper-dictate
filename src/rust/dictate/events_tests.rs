@@ -19,7 +19,6 @@ use std::io::{self, Write};
 use serde_json::{json, Map, Value};
 
 use super::events::*;
-use crate::test_env_lock::ENV_LOCK;
 
 // --- env-var helper -------------------------------------------------------
 
@@ -58,7 +57,7 @@ impl Drop for EnvVarGuard {
 // --- helpers --------------------------------------------------------------
 
 fn emit_status_bytes(event: &StatusEvent) -> Vec<u8> {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
     let mut buf = Vec::new();
     emit_status(&mut buf, event).expect("emit_status writes to Vec");
@@ -66,7 +65,7 @@ fn emit_status_bytes(event: &StatusEvent) -> Vec<u8> {
 }
 
 fn emit_audio_bytes(event: &AudioEvent) -> Vec<u8> {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
     let mut buf = Vec::new();
     emit_audio(&mut buf, event).expect("emit_audio writes to Vec");
@@ -74,7 +73,7 @@ fn emit_audio_bytes(event: &AudioEvent) -> Vec<u8> {
 }
 
 fn emit_utterance_bytes(payload: &Value) -> Vec<u8> {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
     let mut buf = Vec::new();
     emit_utterance(&mut buf, payload).expect("emit_utterance writes to Vec");
@@ -82,7 +81,7 @@ fn emit_utterance_bytes(payload: &Value) -> Vec<u8> {
 }
 
 fn emit_error_bytes(message: &str, payload: &Value) -> Vec<u8> {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
     let mut buf = Vec::new();
     emit_error(&mut buf, message, payload).expect("emit_error writes to Vec");
@@ -569,7 +568,7 @@ fn worker_events_env_var_gates_emission() {
     // `crate::dictate::env_gates::is_truthy`, so "", "0", "false",
     // "no", "off" (case-insensitive, trimmed) suppress the write while
     // anything else lets it through.
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
 
     // Off by default — variable not set => no-op.
     {
@@ -630,7 +629,7 @@ fn write_line_flushes_once_per_event() {
     // Each worker-event line is fully observable to a downstream reader
     // the moment it lands: `write_line` flushes after the terminating
     // newline.
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _lock = crate::test_env_lock::lock_env();
     let _env = EnvVarGuard::set("VOICEPI_WORKER_EVENTS", "1");
 
     let mut writer = FlushTrackingWriter {

@@ -186,9 +186,7 @@ fn missing_backend_display_names_reason_and_rebuild_features() {
 
 #[test]
 fn runtime_snapshots_never_mutate_process_settings_or_credentials() {
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let previous_lang = std::env::var_os("VOICEPI_LANG");
     let previous_key = std::env::var_os("VOICEPI_STT_API_KEY");
     std::env::set_var("VOICEPI_LANG", "ambient-language");

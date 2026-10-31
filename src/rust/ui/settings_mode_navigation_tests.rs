@@ -3,12 +3,12 @@
 //! file had grown to 563 lines) — see its doc comment for the full module
 //! breakdown.
 
-use super::test_support::{test_app, EnvVarGuard, ENV_TEST_LOCK};
+use super::test_support::{test_app, EnvVarGuard};
 use super::*;
 
 #[test]
 fn switching_to_simple_falls_back_the_selected_tab_when_it_becomes_hidden() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
@@ -23,7 +23,7 @@ fn switching_to_simple_falls_back_the_selected_tab_when_it_becomes_hidden() {
 
 #[test]
 fn switching_to_simple_keeps_the_selected_tab_when_it_stays_visible() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
@@ -38,7 +38,7 @@ fn switching_to_simple_keeps_the_selected_tab_when_it_stays_visible() {
 
 #[test]
 fn switching_to_advanced_never_changes_the_selected_tab() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     let _config_guard = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
@@ -86,7 +86,7 @@ fn select_tab_never_clamps_in_advanced_mode() {
 
 #[test]
 fn reload_settings_falls_back_the_selected_tab_when_the_reloaded_config_is_simple() {
-    let _lock = ENV_TEST_LOCK.lock().unwrap();
+    let _lock = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.json");
     std::fs::write(&config, r#"{"ui_settings_mode":"simple"}"#).unwrap();

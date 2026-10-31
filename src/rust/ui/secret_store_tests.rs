@@ -2,9 +2,7 @@ use super::write_secret_store_contents;
 
 #[test]
 fn clearing_the_last_file_credential_removes_the_store() {
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|poison| poison.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("keys.json");
     let _environment =

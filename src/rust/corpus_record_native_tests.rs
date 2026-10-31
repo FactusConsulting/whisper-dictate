@@ -319,9 +319,7 @@ fn effective_audio_device_reads_env_var() {
     // mic name (trimmed) instead of the OS-default fallback. Serialised
     // through the shared env-var lock so a parallel schema loader in a
     // sibling module doesn't race.
-    let _guard = crate::test_env_lock::ENV_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _guard = crate::test_env_lock::lock_env();
     let old_env = std::env::var("VOICEPI_AUDIO_DEVICE").ok();
     // `CONFIG_ENV` is `pub(crate)` inside `config::io` (a private
     // submodule); tests reach it via the literal to avoid re-exporting.

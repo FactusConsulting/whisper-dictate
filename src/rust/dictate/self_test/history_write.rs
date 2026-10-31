@@ -279,9 +279,7 @@ mod tests {
     /// `ok=false` + a descriptive error.
     #[test]
     fn write_failure_in_production_branch_propagates_from_reloading_sink() {
-        let _guard = crate::test_env_lock::ENV_LOCK
-            .lock()
-            .unwrap_or_else(|p| p.into_inner());
+        let _guard = crate::test_env_lock::lock_env();
 
         let dir = tempdir().unwrap();
         // Empty valid config.json so `effective_history_settings`
