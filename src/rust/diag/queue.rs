@@ -73,7 +73,8 @@ pub(crate) fn enqueue_async_into(
 /// the send.
 ///
 /// `reserved` runs after [`DropLedger::take_unbound`] has emptied the
-/// unbound counter and before the record is offered to the channel
+/// unbound counter and the record has been counted in `pending`, and
+/// before the record is offered to the channel,
 /// which is exactly the window in which a concurrent
 /// [`drain_and_shutdown_into`] can slip its sentinel into the queue
 /// ahead of this record. Production
@@ -96,6 +97,18 @@ pub(crate) fn enqueue_async_into(
 /// as it was before the gate existed. The refusal itself is deliberately
 /// not counted - see the module docs for why a partial count is worse
 /// than none here.
+///
+/// ## `pending` counts the record BEFORE it is offered
+///
+/// Once `try_send` succeeds the writer may dequeue, write and count the
+/// record out of `pending` before this thread runs its next instruction.
+/// If the count followed the send, that `fetch_sub` could land first and
+/// `pending` would under-count (or wrap) for as long as this thread stayed
+/// descheduled: another producer's record that was still queued could
+/// then read as drained, and [`flush_async_for_tests`] would return
+/// before that record reached the tee. Counting first keeps `pending` an
+/// upper bound on what is queued or being written; a failed send takes
+/// its count back, because that record never reaches the writer.
 pub(crate) fn enqueue_async_into_after<H>(
     tx: &SyncSender<AsyncRecord>,
     gate: &ShutdownGate,
@@ -110,15 +123,15 @@ pub(crate) fn enqueue_async_into_after<H>(
         return;
     }
     let drops_before = dropped.take_unbound();
+    pending.fetch_add(1, Ordering::Relaxed);
     reserved();
     match tx.try_send(AsyncRecord::Line {
         drops_before,
         message,
     }) {
-        Ok(()) => {
-            pending.fetch_add(1, Ordering::Relaxed);
-        }
+        Ok(()) => {}
         Err(TrySendError::Full(_)) => {
+            pending.fetch_sub(1, Ordering::Relaxed);
             // Shed the newest record but ACCOUNT for it, so the writer
             // can tell the log reader the trace has a gap and how big.
             // The count we took has no record to ride on after all, so
@@ -126,6 +139,7 @@ pub(crate) fn enqueue_async_into_after<H>(
             dropped.shed(drops_before);
         }
         Err(TrySendError::Disconnected(_)) => {
+            pending.fetch_sub(1, Ordering::Relaxed);
             // The writer thread is gone. Not counted (and what we took
             // is deliberately not restored): the marker could never be
             // emitted, so the counter would only grow forever.
