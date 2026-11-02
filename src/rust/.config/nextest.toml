@@ -8,3 +8,10 @@ fail-fast = false
 platform = 'cfg(windows)'
 filter = 'test(=ui::app_tests::view::hidden_windows_event_loop_drains_runtime_and_tray_without_ui)'
 threads-required = 'num-test-threads'
+
+# Injects real keyboard input and captures it with a low-level hook. Run it
+# alone so no other hook or injection test observes or adds to the burst.
+[[profile.ci.overrides]]
+platform = 'cfg(windows)'
+filter = 'test(=injection::enigo_backend::enigo_backend_windows_tests::typing_injects_exact_utf16_code_units_regardless_of_layout)'
+threads-required = 'num-test-threads'
