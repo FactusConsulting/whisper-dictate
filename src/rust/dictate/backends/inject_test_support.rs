@@ -14,7 +14,7 @@ use anyhow::{anyhow, Result};
 
 use super::EnigoInjectBackend;
 use crate::injection::enigo_backend::InjectorBackend;
-use crate::injection::paste::Clipboard;
+use crate::injection::paste::{Clipboard, ClipboardBackup, SavedFormat};
 use crate::injection::{InjectMethod, Injector};
 
 /// Recording fake — captures every call made by [`Injector`] so the
@@ -92,6 +92,10 @@ pub(super) struct RecordingClipboard {
     failed_writes: Arc<Mutex<usize>>,
     write_attempts: Arc<Mutex<usize>>,
     fail_on_attempt: Arc<Mutex<Option<usize>>>,
+    /// Formats of a rich selection; `contents` is its plain-text form.
+    /// Cleared by any write, set again by a format restore.
+    rich: Arc<Mutex<Option<Vec<SavedFormat>>>>,
+    restored_formats: Arc<Mutex<Vec<Vec<SavedFormat>>>>,
 }
 
 impl RecordingClipboard {
@@ -99,6 +103,25 @@ impl RecordingClipboard {
         let me = Self::default();
         *me.contents.lock().unwrap() = value.map(str::to_owned);
         me
+    }
+
+    pub(super) fn with_rich_selection(text: Option<&str>, formats: Vec<SavedFormat>) -> Self {
+        let me = Self::with_initial(text);
+        *me.rich.lock().unwrap() = Some(formats);
+        me
+    }
+
+    pub(super) fn restored_formats(&self) -> Vec<Vec<SavedFormat>> {
+        self.restored_formats.lock().unwrap().clone()
+    }
+
+    pub(super) fn rich_formats(&self) -> Option<Vec<SavedFormat>> {
+        self.rich.lock().unwrap().clone()
+    }
+
+    pub(super) fn simulate_rich_copy(&self, text: Option<&str>, formats: Vec<SavedFormat>) {
+        *self.contents.lock().unwrap() = text.map(str::to_owned);
+        *self.rich.lock().unwrap() = Some(formats);
     }
 
     pub(super) fn snapshot_writes(&self) -> Vec<String> {
@@ -165,7 +188,29 @@ impl Clipboard for RecordingClipboard {
         }
         self.writes.lock().unwrap().push(value.to_owned());
         *self.contents.lock().unwrap() = Some(value.to_owned());
+        *self.rich.lock().unwrap() = None;
         true
+    }
+    fn backup(&mut self) -> Option<ClipboardBackup> {
+        let Some(formats) = self.rich_formats() else {
+            return self.read().map(ClipboardBackup::Text);
+        };
+        *self.reads.lock().unwrap() += 1;
+        Some(ClipboardBackup::Formats {
+            text: self.read_contents(),
+            formats,
+        })
+    }
+    fn restore(&mut self, backup: &ClipboardBackup) -> bool {
+        match backup {
+            ClipboardBackup::Text(text) => self.write(text),
+            ClipboardBackup::Formats { text, formats } => {
+                self.restored_formats.lock().unwrap().push(formats.clone());
+                *self.contents.lock().unwrap() = text.clone();
+                *self.rich.lock().unwrap() = Some(formats.clone());
+                true
+            }
+        }
     }
 }
 

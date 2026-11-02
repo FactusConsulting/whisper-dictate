@@ -9,6 +9,8 @@
 //! `rust-injection` Cargo feature used by supported desktop builds.
 //! [`wayland`] and [`keymap`] provide layout-correct Linux typing.
 
+#[cfg(all(feature = "rust-injection", any(target_os = "windows", test)))]
+pub(crate) mod clipboard_formats;
 pub mod dispatcher;
 pub mod enigo_backend;
 pub mod fallback;
@@ -34,7 +36,9 @@ pub mod wayland;
 
 pub use dispatcher::{InjectMethod, Injector};
 pub use fallback::{fallback_chain, select_helper, LinuxSession};
-pub use paste::{Clipboard, PasteGuard, PasteShortcut};
+pub use paste::{
+    Clipboard, ClipboardBackup, PasteGuard, PasteShortcut, SavedFormat, SavedFormatKind,
+};
 pub use plan::{
     build_plan, execute_plan, pick_backend, plan_keystrokes, resolve_mode, InjectionPlan, PlanMode,
 };
