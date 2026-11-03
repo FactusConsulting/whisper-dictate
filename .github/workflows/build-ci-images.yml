@@ -69,6 +69,7 @@ jobs:
           echo "base_image=${base_image}" >>"$GITHUB_OUTPUT"
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: docker/ci-ubuntu2604
@@ -83,3 +84,14 @@ jobs:
           # GHA cache keeps the apt/rustup layers warm across runs.
           cache-from: type=gha,scope=ci-ubuntu2604
           cache-to: type=gha,mode=max,scope=ci-ubuntu2604
+
+      # Report-only inventory of the image just pushed: it must never turn a
+      # successful publish red. Pinned to a commit because it receives the
+      # Dependency-Track key in a job that can write packages.
+      - name: Upload SBOM to Dependency-Track
+        continue-on-error: true
+        uses: FactusConsulting/pipeline-templates/sbom-dependency-track@e2a3278c686493b4c336156a47631adc735e78db # v1
+        with:
+          image: ${{ steps.tags.outputs.image }}@${{ steps.build.outputs.digest }}
+          version: sha-${{ steps.tags.outputs.sha_short }}
+          dtrack-api-key: ${{ secrets.DTRACK_API_KEY }}
