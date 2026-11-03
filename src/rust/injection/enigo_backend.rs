@@ -6,12 +6,13 @@
 //! `mod.rs` performs runtime detection: even with the feature compiled in,
 //! the path is only taken when `VOICEPI_INJECTION_BACKEND=rust` is set.
 //!
-//! Layout-independence: `enigo`'s `Key::Unicode` types the literal codepoint
-//! regardless of the active layout, and for the paste shortcut we send the VK
-//! codes from [`super::paste::vk`] so `Ctrl+V` works on AZERTY/Russian/Dvorak
-//! without remapping. The `key_chord` helper is pulled into a free function
-//! that tests can drive with a recording fake of [`InjectorBackend`]
-//! `enigo` itself is hard to construct in CI (no display server).
+//! Layout-independence: typing goes through `enigo`'s `text`, which emits the
+//! literal codepoint regardless of the active layout, and for the paste
+//! shortcut we send the VK codes from [`super::paste::vk`] so `Ctrl+V` works
+//! on AZERTY/Russian/Dvorak without remapping. The `key_chord` helper is
+//! pulled into a free function that tests can drive with a recording fake of
+//! [`InjectorBackend`]; `enigo` itself is hard to construct in CI (no display
+//! server).
 
 use anyhow::{anyhow, Result};
 
@@ -161,13 +162,17 @@ mod enigo_impl {
             text: &str,
             should_continue: &dyn Fn() -> bool,
         ) -> Result<()> {
+            // Each character goes through `text`, which emits the codepoint
+            // itself (`KEYEVENTF_UNICODE` on Windows). `key(Key::Unicode)`
+            // resolves a layout key instead: on Windows it drops characters
+            // that need Shift/AltGr and types layout-specific symbols when
+            // the target window's layout differs.
+            let mut buffer = [0u8; 4];
             for character in text.chars() {
                 if !should_continue() {
                     return Err(anyhow!("injection cancelled"));
                 }
-                self.enigo
-                    .key(Key::Unicode(character), Click)
-                    .map_err(|e| anyhow!("enigo type failed: {e}"))?;
+                self.type_text(character.encode_utf8(&mut buffer))?;
             }
             Ok(())
         }
@@ -258,6 +263,10 @@ mod enigo_impl {
 #[cfg(test)]
 #[path = "enigo_backend_tests.rs"]
 mod enigo_backend_tests;
+
+#[cfg(all(test, windows, feature = "rust-injection"))]
+#[path = "enigo_backend_windows_tests.rs"]
+mod enigo_backend_windows_tests;
 
 #[cfg(test)]
 mod tests {
