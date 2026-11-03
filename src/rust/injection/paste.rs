@@ -107,12 +107,65 @@ pub mod evdev {
     pub const KEY_LEFTMETA: u16 = 125;
 }
 
+/// How a [`SavedFormat`]'s bytes are put back on the clipboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SavedFormatKind {
+    /// Raw bytes of a global-memory clipboard block.
+    Memory,
+    /// Serialized enhanced metafile (`GetEnhMetaFileBits`).
+    EnhancedMetafile,
+}
+
+/// One clipboard format captured for a later restore.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SavedFormat {
+    pub format: u32,
+    pub kind: SavedFormatKind,
+    pub bytes: Vec<u8>,
+}
+
+/// Clipboard contents saved before a paste so they can be put back after it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClipboardBackup {
+    /// Plain-text selection; an empty clipboard is the empty string.
+    Text(String),
+    /// Every format of a rich selection, plus its plain-text form when it
+    /// has one.
+    Formats {
+        text: Option<String>,
+        formats: Vec<SavedFormat>,
+    },
+}
+
+impl ClipboardBackup {
+    /// Plain-text form of the saved selection, when it has one.
+    pub fn text(&self) -> Option<&str> {
+        match self {
+            Self::Text(text) => Some(text),
+            Self::Formats { text, .. } => text.as_deref(),
+        }
+    }
+}
+
 /// Trait over the system clipboard so paste logic can be tested without
 /// arboard / wl-copy / X selections. Implementations live in
-/// [`super::clipboard`].
+/// `native_clipboard` and `system_clipboard`.
 pub trait Clipboard {
     fn read(&mut self) -> Option<String>;
     fn write(&mut self, value: &str) -> bool;
+    /// Save the current selection for a later [`Self::restore`]. `None`
+    /// when it cannot be saved; callers must then not overwrite it.
+    /// Text-only clipboards save the plain-text selection.
+    fn backup(&mut self) -> Option<ClipboardBackup> {
+        self.read().map(ClipboardBackup::Text)
+    }
+    /// Put a [`Self::backup`] result back; `true` on success.
+    fn restore(&mut self, backup: &ClipboardBackup) -> bool {
+        match backup {
+            ClipboardBackup::Text(text) => self.write(text),
+            ClipboardBackup::Formats { .. } => false,
+        }
+    }
 }
 
 /// Saves the current clipboard, copies `text`, and returns a guard that

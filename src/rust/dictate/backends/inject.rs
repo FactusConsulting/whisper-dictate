@@ -85,7 +85,7 @@ use std::time::Duration;
 
 use crate::dictate::session::types::{InjectBackend, InjectError};
 use crate::hotkey::{InjectionBracket, InjectionGuard};
-use crate::injection::paste::{vk, Clipboard};
+use crate::injection::paste::{vk, Clipboard, ClipboardBackup};
 use crate::injection::{InjectMethod, Injector};
 
 /// Pre-arm grace opened just before the injector calls `SendInput` for
@@ -273,7 +273,7 @@ struct State {
 #[derive(Default)]
 pub(crate) struct RestoreState {
     generation: u64,
-    original: Option<String>,
+    original: Option<ClipboardBackup>,
     injected: Option<String>,
     active: bool,
 }
@@ -718,10 +718,10 @@ impl EnigoInjectBackend {
     /// retry as typing on `os`. A refused clipboard write means the chord
     /// was never sent and nothing was typed, so typing cannot
     /// double-inject. On Windows that is the only retried failure: `auto`
-    /// always picks paste there, and the string-only clipboard adapter
-    /// refuses to replace a rich selection (HTML, image) with plain text,
-    /// so without the fallback dictation would insert nothing until the
-    /// user copied text.
+    /// always picks paste there, and the guarded clipboard refuses to
+    /// replace a selection it cannot back up (private or GDI-object formats,
+    /// very large data), so without the fallback dictation would insert
+    /// nothing until the user copied something else.
     pub(crate) fn auto_paste_may_fall_back(
         method: InjectMethod,
         error: &InjectError,
@@ -784,12 +784,17 @@ fn inject_via_paste(
         let mut clip_guard = clipboard
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let current = clip_guard.read();
+        let current = clip_guard.backup();
         let started_cycle = !restore_guard.active;
         if started_cycle {
             restore_guard.original = current;
             restore_guard.active = true;
-        } else if current.is_some() && current.as_deref() != restore_guard.injected.as_deref() {
+        } else if current.as_ref().is_some_and(|backup| match backup {
+            // Transcript writes are plain text, so a rich selection is always
+            // newer than our previous paste, even when its text matches.
+            ClipboardBackup::Formats { .. } => true,
+            ClipboardBackup::Text(text) => Some(text.as_str()) != restore_guard.injected.as_deref(),
+        }) {
             // The user copied something after our previous paste. That newer
             // selection becomes the canonical backup for the extended cycle.
             restore_guard.original = current;
@@ -881,8 +886,8 @@ fn spawn_clipboard_restore(
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
             if clip_guard.read().as_deref() == Some(injected.as_str()) {
-                if let Some(previous) = restore_guard.original.as_deref() {
-                    if !clip_guard.write(previous) {
+                if let Some(previous) = restore_guard.original.as_ref() {
+                    if !clip_guard.restore(previous) {
                         // Keep the canonical backup and active generation so
                         // a later paste cycle can retry restoration.
                         return;
@@ -905,6 +910,9 @@ mod inject_cleanup_tests;
 #[cfg(test)]
 #[path = "inject_restore_tests.rs"]
 mod inject_restore_tests;
+#[cfg(test)]
+#[path = "inject_rich_restore_tests.rs"]
+mod inject_rich_restore_tests;
 #[cfg(test)]
 #[path = "inject_test_support.rs"]
 mod inject_test_support;

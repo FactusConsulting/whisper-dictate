@@ -220,9 +220,9 @@ fn windows_auto_uses_reliable_paste_for_ascii_and_unicode() {
     }
 }
 
-/// Windows `auto` always picks paste, so a clipboard the string-only
-/// adapter refuses to overwrite (rich selection) must degrade to typing
-/// rather than inject nothing; the chord was never sent, so typing cannot
+/// Windows `auto` always picks paste, so a selection the guarded clipboard
+/// cannot back up and refuses to overwrite must degrade to typing rather
+/// than inject nothing; the chord was never sent, so typing cannot
 /// double-inject.
 #[test]
 #[cfg(windows)]

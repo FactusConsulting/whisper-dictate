@@ -474,6 +474,7 @@ fn inject_auto(
                 std::env::consts::OS,
             ) =>
         {
+            crate::diag::log!("[inject] auto paste not possible ({error}); typing instead");
             enigo.inject_using(text, InjectMethod::Typing)
         }
         result => result,
