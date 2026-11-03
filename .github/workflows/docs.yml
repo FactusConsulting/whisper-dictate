@@ -47,6 +47,14 @@ jobs:
     runs-on: arc-runner-public
     steps:
       - uses: actions/checkout@v7
+      - name: Install Node runtime library
+        # The arc-runner-public image ships without libatomic1, which the official
+        # Node 26+ Linux builds link against; without it setup-node's node exits 127.
+        run: |
+          set -euo pipefail
+          if dpkg -s libatomic1 >/dev/null 2>&1; then exit 0; fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libatomic1
       - uses: actions/setup-node@v7
         with:
           node-version: lts/*
@@ -61,6 +69,14 @@ jobs:
     runs-on: arc-runner-public
     steps:
       - uses: actions/checkout@v7
+      - name: Install Node runtime library
+        # The arc-runner-public image ships without libatomic1, which the official
+        # Node 26+ Linux builds link against; without it setup-node's node exits 127.
+        run: |
+          set -euo pipefail
+          if dpkg -s libatomic1 >/dev/null 2>&1; then exit 0; fi
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libatomic1
       - uses: actions/setup-node@v7
         with:
           node-version: lts/*
