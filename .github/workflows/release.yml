@@ -557,12 +557,14 @@ jobs:
   # Inno fix was applied to only one copy and two RCs failed). This job just
   # forwards the resolved tag + prerelease flag. Every release rebuilds Windows;
   # the exact staged installer is then smoke-tested before publication.
+  #
+  # The build only stages a private Actions artifact (read-only token, no
+  # secrets), so it depends on the preflight version gate alone and runs in
+  # parallel with `tests`. Every publishing job (`release`,
+  # `publish-windows-channels`) requires `tests` success or an already-green
+  # push run.
   windows-installer:
-    needs: [preflight, tests]
-    if: >-
-      !cancelled() &&
-      (needs.tests.result == 'success' ||
-      needs.preflight.outputs.already_green == 'true')
+    needs: preflight
     permissions:
       contents: read
     uses: ./.github/workflows/windows-installer-build.yml
@@ -590,11 +592,9 @@ jobs:
   #   * a real STT model load (models are intentionally not downloaded in CI).
   install-smoke:
     needs: windows-installer
-    # A manual dispatch may intentionally skip the reusable `tests` job when
-    # preflight finds an already-green push run.  `!cancelled()` prevents that
-    # transitive skip from suppressing this required artifact gate while still
-    # honoring an explicit cancellation; the installer caller itself must
-    # have completed successfully.
+    # The installer build depends only on preflight, so this gate does not wait
+    # for `tests`. `!cancelled()` keeps an explicit cancellation authoritative;
+    # the installer caller itself must have completed successfully.
     if: >-
       !cancelled() &&
       needs.windows-installer.result == 'success'
@@ -663,12 +663,15 @@ jobs:
           echo "install-smoke PASSED for $TAG: native-only layout OK, Rust controller launches headless, and native doctor emits valid JSON."
 
   publish-windows-channels:
-    needs: [release, install-smoke]
+    needs: [preflight, tests, release, install-smoke]
     # If preflight skipped the reusable tests job, the default success() check
-    # would otherwise treat that transitive skip as a reason not to publish.
-    # Keep cancellation semantics while requiring both release gates.
+    # would otherwise treat that skip as a reason not to publish. Keep
+    # cancellation semantics while requiring the test gate (fresh success or an
+    # already-green push run) and both release gates.
     if: >-
       !cancelled() &&
+      (needs.tests.result == 'success' ||
+      needs.preflight.outputs.already_green == 'true') &&
       needs.release.result == 'success' &&
       needs.install-smoke.result == 'success'
     permissions:

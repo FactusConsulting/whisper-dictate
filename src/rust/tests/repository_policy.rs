@@ -798,11 +798,125 @@ fn release_skips_redundant_ci_only_after_a_successful_matching_run() {
         .expect("release workflow must define the Windows channel publisher");
     assert!(
         release.contains(
-            "  publish-windows-channels:\n    needs: [release, install-smoke]\n    # If preflight skipped the reusable tests job"
+            "  publish-windows-channels:\n    needs: [preflight, tests, release, install-smoke]\n    # If preflight skipped the reusable tests job"
         ) && publish_channels.contains(
-            "if: >-\n      !cancelled() &&\n      needs.release.result == 'success' &&\n      needs.install-smoke.result == 'success'"
+            "if: >-\n      !cancelled() &&\n      (needs.tests.result == 'success' ||\n      needs.preflight.outputs.already_green == 'true') &&\n      needs.release.result == 'success' &&\n      needs.install-smoke.result == 'success'"
         ),
-        "Windows channel publication must bypass transitive test skips without ignoring cancellation and only after both release gates"
+        "Windows channel publication must bypass transitive test skips without ignoring cancellation and only after the test gate and both release gates"
+    );
+}
+
+/// Splits release.yml into `(job name, job body)` pairs. A job starts at a
+/// two-space-indented `name:` line under `jobs:` and ends at the next
+/// two-space-indented line (the next job or its leading comment).
+fn release_jobs(release: &str) -> Vec<(String, String)> {
+    let jobs = release
+        .split_once("\njobs:\n")
+        .expect("release workflow must define jobs")
+        .1;
+    let mut parsed: Vec<(String, String)> = Vec::new();
+    let mut current: Option<(String, String)> = None;
+    for line in jobs.lines() {
+        let top_level = line.starts_with("  ") && !line.starts_with("   ");
+        if top_level {
+            parsed.extend(current.take());
+            let header = line.trim();
+            if !header.starts_with('#') {
+                if let Some(name) = header.strip_suffix(':') {
+                    current = Some((name.to_owned(), String::new()));
+                }
+            }
+        } else if let Some((_, body)) = current.as_mut() {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    parsed.extend(current);
+    parsed
+}
+
+#[test]
+fn release_builds_windows_installer_in_parallel_but_publishes_only_after_tests() {
+    let release = read_repo(".github/workflows/release.yml");
+    let jobs = release_jobs(&release);
+    let job = |name: &str| {
+        jobs.iter()
+            .find(|(job, _)| job == name)
+            .map(|(_, body)| body.as_str())
+            .unwrap_or_else(|| panic!("release workflow must define the {name} job"))
+    };
+
+    let installer = job("windows-installer");
+    assert!(
+        installer.starts_with("    needs: preflight\n"),
+        "the Windows installer build must depend on the preflight version gate only"
+    );
+    assert!(
+        !installer.contains("tests"),
+        "the Windows installer build must not wait for the release test workflow"
+    );
+    assert!(
+        installer.contains("    permissions:\n      contents: read\n")
+            && !installer.contains("secrets:"),
+        "the installer build runs before tests pass, so it must stay unable to publish"
+    );
+    let smoke = job("install-smoke");
+    assert!(
+        smoke.starts_with("    needs: windows-installer\n") && !smoke.contains("needs.tests"),
+        "install-smoke must follow the installer build, not the release test workflow"
+    );
+    assert!(
+        smoke.contains("    permissions:\n      contents: read\n") && !smoke.contains("secrets."),
+        "install-smoke runs before tests pass, so it must stay unable to publish"
+    );
+
+    let test_gate = "      (needs.tests.result == 'success' ||\n      needs.preflight.outputs.already_green == 'true')";
+    let publish_markers = [
+        "contents: write",
+        "packages: write",
+        "secrets:",
+        "secrets.",
+        "gh release",
+        "git push",
+        "nuget push",
+    ];
+    let mut publishers = Vec::new();
+    for (name, body) in &jobs {
+        if !publish_markers.iter().any(|marker| body.contains(marker)) {
+            continue;
+        }
+        publishers.push(name.as_str());
+        let needs = body
+            .lines()
+            .find_map(|line| line.strip_prefix("    needs: "))
+            .unwrap_or_else(|| panic!("publishing job {name} must declare needs"));
+        for gate in ["preflight", "tests", "install-smoke"] {
+            assert!(
+                needs
+                    .trim_matches(['[', ']'])
+                    .split(',')
+                    .any(|need| need.trim() == gate),
+                "publishing job {name} must need {gate}; got `{needs}`"
+            );
+        }
+        let condition = body
+            .split_once("    if: >-\n")
+            .map(|(_, tail)| {
+                tail.lines()
+                    .take_while(|line| line.starts_with("      "))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_else(|| panic!("publishing job {name} must declare a folded if gate"));
+        assert!(
+            condition.starts_with("      !cancelled() &&") && condition.contains(test_gate),
+            "publishing job {name} must require tests success or an already-green push run; got `{condition}`"
+        );
+    }
+    assert_eq!(
+        publishers,
+        ["release", "publish-windows-channels"],
+        "every job that can publish must be covered by the test gate check"
     );
 }
 
@@ -1297,7 +1411,9 @@ fn release_stages_and_smokes_windows_before_any_publication() {
     assert!(
         release.contains("gh release edit \"$TAG\" --repo \"$GITHUB_REPOSITORY\" --draft=false")
     );
-    assert!(release.contains("publish-windows-channels:\n    needs: [release, install-smoke]"));
+    assert!(release.contains(
+        "publish-windows-channels:\n    needs: [preflight, tests, release, install-smoke]"
+    ));
     assert!(publisher.contains("actions/download-artifact@v8"));
     assert!(publisher.contains("dotnet nuget push"));
     assert!(publisher.contains("publish-chocolatey-feed.ps1"));

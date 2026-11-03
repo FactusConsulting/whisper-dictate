@@ -62,12 +62,14 @@ tag for an already published release.
 
 ## Test the RC
 
-1. **Automated — gate A (`install-smoke`)**: the release workflow first stages
-   the Windows installer as a private Actions artifact, then runs
-   `install-smoke` on a headless `windows-2025` runner for **both** finals and
-   RCs. It is a **pre-publication gate**: a failed Windows build or smoke test
-   leaves GitHub Releases, Homebrew, winget and Chocolatey untouched. Linux and
-   Windows assets are published together only after the gate succeeds.
+1. **Automated — gate A (`install-smoke`)**: right after the version preflight,
+   the release workflow stages the Windows installer as a private Actions
+   artifact in parallel with the test workflow, then runs `install-smoke` on a
+   headless `windows-2025` runner for **both** finals and RCs. It is a
+   **pre-publication gate**: a failed Windows build or smoke test leaves GitHub
+   Releases, Homebrew, winget and Chocolatey untouched. Linux and Windows assets
+   are published together only after both the tests (or an already-green push
+   CI run for the tagged commit) and this gate succeed.
 
    What it covers:
    - Downloads the staged `whisper-dictate-windows-setup-<version>.exe` Actions
