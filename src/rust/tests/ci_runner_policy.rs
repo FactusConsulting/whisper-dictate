@@ -2,10 +2,11 @@
 //!
 //! Linux jobs run on the self-hosted `arc-runner-public` ARC runners, whose
 //! image lacks tooling the GitHub-hosted images shipped (C toolchain, cmake,
-//! libclang, `gh`, `pwsh`, `zip`) and has no Docker daemon. Docker-dependent
-//! jobs run on `arc-runner-public-docker`, which fork PRs must never reach.
-//! Windows jobs stay GitHub-hosted. These checks pin the runner mapping and
-//! that each job bootstraps the tools it uses before using them.
+//! libclang, `gh`, `pwsh`, `zip`, the `libatomic1` runtime official Node
+//! builds link against) and has no Docker daemon. Docker-dependent jobs run
+//! on `arc-runner-public-docker`, which fork PRs must never reach. Windows
+//! jobs stay GitHub-hosted. These checks pin the runner mapping and that each
+//! job bootstraps the tools it uses before using them.
 
 mod common;
 
@@ -289,6 +290,34 @@ fn arc_jobs_install_gh_pwsh_and_zip_before_using_them() {
     assert!(
         checked >= 5,
         "tool-usage discovery broke: saw {checked} usages"
+    );
+}
+
+#[test]
+fn arc_jobs_install_libatomic_before_setting_up_node() {
+    // Official Node 26+ Linux builds link libatomic.so.1. Both ARC scale sets
+    // run an image without it, so setup-node's freshly downloaded node fails
+    // its version probe with exit 127 unless the job installs it first.
+    let mut checked = 0;
+    for job in jobs()
+        .into_iter()
+        .filter(|job| uses_arc(job) || runs_on(job) == Some(ARC_DOCKER))
+    {
+        assert!(
+            before(
+                &job,
+                "apt-get install -y --no-install-recommends libatomic1",
+                "actions/setup-node"
+            ),
+            "{}:{} sets up Node on an ARC runner before installing libatomic1",
+            job.file,
+            job.name
+        );
+        checked += usize::from(job.body.contains("actions/setup-node"));
+    }
+    assert!(
+        checked >= 3,
+        "setup-node discovery broke: saw {checked} ARC jobs"
     );
 }
 
