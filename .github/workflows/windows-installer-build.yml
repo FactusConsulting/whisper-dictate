@@ -55,6 +55,14 @@ jobs:
       BUILD_RECIPE_SHA: ${{ github.workflow_sha }}
       # Pin a downloadable stable SDK; isolate native caches when it changes.
       VULKAN_SDK_VERSION: 1.4.357.0
+      # The pinned SDK installer is mirrored, unmodified, as an asset on the
+      # non-latest prerelease `toolchain-vulkan-sdk-<version>` (a tag on a
+      # parentless commit). scripts/windows/install-vulkan-sdk.ps1 downloads
+      # it from there first and from sdk.lunarg.com second, and only installs
+      # a file matching this SHA-256. Bumping the version means uploading the
+      # new installer to a new toolchain release and updating all three values.
+      VULKAN_SDK_SHA256: 81f474711e9042f4cd22b31b2f7a8870db2e428b21586fb43dd80150be97310d
+      VULKAN_SDK_MIRROR_URL: https://github.com/${{ github.repository }}/releases/download/toolchain-vulkan-sdk-1.4.357.0/vulkansdk-windows-X64-1.4.357.0.exe
       # Kill-switch for the whisper.cpp Vulkan build. Default '1' =
       # ship a GPU-capable Windows binary (whisper-rs-vulkan feature + Vulkan
       # SDK setup + linked-backend regression check). Override to '0' at the
@@ -129,6 +137,7 @@ jobs:
             RELEASE_BINARY_BUILDER = 'build-release-binaries.ps1'
             RELEASE_PORTABLE_BUILDER = 'build-portable-zip.ps1'
             RELEASE_INNO_VERIFIER = 'verify-inno-payload.ps1'
+            RELEASE_VULKAN_SDK_INSTALLER = 'install-vulkan-sdk.ps1'
           }
           foreach ($entry in $helpers.GetEnumerator()) {
             $helper = Join-Path $env:RUNNER_TEMP $entry.Value
@@ -192,24 +201,40 @@ jobs:
       # Intel driver ships vulkan-1.dll (Windows 10+ with any up-to-date GPU
       # driver), so no runtime DLL travels in the installer.
       #
-      # Uses jakoch/install-vulkan-sdk-action (the LunarG installer, which
-      # includes glslc) NOT humbletim/setup-vulkan-sdk (headers+loader only,
-      # no glslc → whisper.cpp's shader compile step fails). Sets
-      # VULKAN_SDK; the "Build Rust desktop UI" step below adds
-      # $VULKAN_SDK\Bin to PATH so cargo's build script finds glslc.
+      # scripts/windows/install-vulkan-sdk.ps1 runs the LunarG installer
+      # (which includes glslc; headers+loader-only setups lack it and
+      # whisper.cpp's shader compile step fails), sets VULKAN_SDK and adds
+      # $VULKAN_SDK\Bin to PATH; the "Build Rust desktop UI" step below also
+      # prepends $VULKAN_SDK\Bin so cargo's build script finds glslc.
+      # A normal install takes well under a minute, so each attempt is capped
+      # at 10 minutes and a failed or timed-out first attempt gets exactly one
+      # retry; the retry reinstalls from scratch.
       #
       # Skipping this step (or setting `VOICEPI_BUILD_VULKAN=0` on the repo
       # Variables tab) yields a CPU-only build — the transcribe path still
       # works, GPU just falls back per `should_use_gpu` in
       # src/rust/whisper/gpu.rs.
       - name: Install Vulkan SDK (Windows GPU acceleration for whisper.cpp)
+        id: vulkan-sdk
         if: steps.win-check.outputs.changed == 'true' && env.VOICEPI_BUILD_VULKAN != '0'
-        uses: jakoch/install-vulkan-sdk-action@v1
-        with:
-          vulkan_version: ${{ env.VULKAN_SDK_VERSION }}
-          install_runtime: true
-          cache: true
-          stripdown: true
+        timeout-minutes: 10
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          & $env:RELEASE_VULKAN_SDK_INSTALLER `
+            -Version $env:VULKAN_SDK_VERSION `
+            -Sha256 $env:VULKAN_SDK_SHA256 `
+            -MirrorUrl $env:VULKAN_SDK_MIRROR_URL
+
+      - name: Retry Vulkan SDK install
+        if: steps.win-check.outputs.changed == 'true' && env.VOICEPI_BUILD_VULKAN != '0' && steps.vulkan-sdk.outcome != 'success'
+        timeout-minutes: 10
+        shell: pwsh
+        run: |
+          & $env:RELEASE_VULKAN_SDK_INSTALLER `
+            -Version $env:VULKAN_SDK_VERSION `
+            -Sha256 $env:VULKAN_SDK_SHA256 `
+            -MirrorUrl $env:VULKAN_SDK_MIRROR_URL
 
       # Cache for the short-CARGO_TARGET_DIR Vulkan build below. The
       # Swatinem/rust-cache step above (workspaces: "src/rust -> ../target")
