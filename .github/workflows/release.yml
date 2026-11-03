@@ -159,59 +159,33 @@ jobs:
       # on manual workflow_dispatch it is the explicit tag input, not the dispatch branch.
       ref: ${{ github.event.inputs.tag || github.ref_name }}
 
-  release:
-    needs: [preflight, tests, install-smoke]
-    if: >-
-      !cancelled() &&
-      needs.install-smoke.result == 'success' &&
-      (needs.tests.result == 'success' ||
-      needs.preflight.outputs.already_green == 'true')
+  # Build the Linux release binary and bundle and stage them as a private
+  # Actions artifact. Like the Windows installer build it has a read-only token
+  # and no secrets, so it depends on the preflight version gate alone and runs
+  # in parallel with `tests` and `windows-installer`; `release` publishes the
+  # staged files only after every gate has passed.
+  linux-bundles:
+    needs: preflight
     runs-on: arc-runner-public
     permissions:
-      contents: write
+      contents: read
     steps:
       - name: Resolve tag
-        id: resolve
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           TAG="$RELEASE_TAG"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
           echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
-          # Prerelease (RC) detection: a SemVer release-candidate tag carries a
-          # literal `-rc.` segment (e.g. v1.9.5-rc.1). A plain vX.Y.Z is NOT a
-          # prerelease. Matching `-rc.` (with the trailing dot) is precise: it
-          # won't false-match a hypothetical `-rcfoo` and requires an index to
-          # follow. This single output gates every prerelease-aware step below.
-          case "$TAG" in
-            *-rc.*) IS_PRERELEASE=true ;;
-            *)      IS_PRERELEASE=false ;;
-          esac
-          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
-          echo "Resolved $TAG -> is_prerelease=$IS_PRERELEASE"
 
       - uses: actions/checkout@v7
         with:
           ref: ${{ env.TAG }}
-          fetch-depth: 0          # full history + tags for generated release notes
 
       - name: Sanity-check scripts
         run: |
           bash -n scripts/linux/install-rust-ui.sh
           bash -n packaging/linux/ubuntu26.04/setup.sh
-
-      - name: Install gh CLI
-        # The arc-runner-public image ships without the GitHub CLI (hosted images had it).
-        run: |
-          set -euo pipefail
-          if command -v gh >/dev/null 2>&1; then exit 0; fi
-          GH_VERSION="2.65.0"
-          curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/gh.tar.gz \
-            "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz"
-          tar -xzf /tmp/gh.tar.gz -C /tmp
-          mkdir -p "$HOME/.local/bin"
-          mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" "$HOME/.local/bin/gh"
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Install Linux Rust UI build deps
         run: |
@@ -280,6 +254,72 @@ jobs:
           install -m 0755 target/release/wd "wd-linux-rust-ui-${VERSION}"
           INCLUDE_RUST_UI=1 mkbundle "whisper-dictate-linux-${VERSION}.zip"
 
+      - name: Stage Linux release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-release-${{ github.event.inputs.tag || github.ref_name }}
+          path: |
+            whisper-dictate-linux-${{ env.VERSION }}.zip
+            wd-linux-rust-ui-${{ env.VERSION }}
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    needs: [preflight, tests, linux-bundles, install-smoke]
+    if: >-
+      !cancelled() &&
+      needs.linux-bundles.result == 'success' &&
+      needs.install-smoke.result == 'success' &&
+      (needs.tests.result == 'success' ||
+      needs.preflight.outputs.already_green == 'true')
+    runs-on: arc-runner-public
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve tag
+        id: resolve
+        env:
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          TAG="$RELEASE_TAG"
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+          # Prerelease (RC) detection: a SemVer release-candidate tag carries a
+          # literal `-rc.` segment (e.g. v1.9.5-rc.1). A plain vX.Y.Z is NOT a
+          # prerelease. Matching `-rc.` (with the trailing dot) is precise: it
+          # won't false-match a hypothetical `-rcfoo` and requires an index to
+          # follow. This single output gates every prerelease-aware step below.
+          case "$TAG" in
+            *-rc.*) IS_PRERELEASE=true ;;
+            *)      IS_PRERELEASE=false ;;
+          esac
+          echo "is_prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Resolved $TAG -> is_prerelease=$IS_PRERELEASE"
+
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+          fetch-depth: 0          # full history + tags for generated release notes
+
+      - name: Install gh CLI
+        # The arc-runner-public image ships without the GitHub CLI (hosted images had it).
+        run: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then exit 0; fi
+          GH_VERSION="2.65.0"
+          curl --proto '=https' --tlsv1.2 -fsSL -o /tmp/gh.tar.gz \
+            "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz"
+          tar -xzf /tmp/gh.tar.gz -C /tmp
+          mkdir -p "$HOME/.local/bin"
+          mv "/tmp/gh_${GH_VERSION}_linux_amd64/bin/gh" "$HOME/.local/bin/gh"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Download staged Linux artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: linux-release-${{ github.event.inputs.tag || github.ref_name }}
+          path: linux-assets
+
       - name: Download smoke-tested Windows artifacts
         uses: actions/download-artifact@v8
         with:
@@ -293,8 +333,8 @@ jobs:
         run: |
           set -euo pipefail
           required=(
-            "whisper-dictate-linux-${VERSION}.zip"
-            "wd-linux-rust-ui-${VERSION}"
+            "linux-assets/whisper-dictate-linux-${VERSION}.zip"
+            "linux-assets/wd-linux-rust-ui-${VERSION}"
             "windows-assets/whisper-dictate-windows-setup-${VERSION}.exe"
             "windows-assets/whisper-dictate-windows-${VERSION}.zip"
             "windows-assets/whisper-dictate.${VERSION}.nupkg"
@@ -340,8 +380,8 @@ jobs:
         run: |
           set -e
           assets=(
-            "whisper-dictate-linux-${VERSION}.zip"
-            "wd-linux-rust-ui-${VERSION}"
+            "linux-assets/whisper-dictate-linux-${VERSION}.zip"
+            "linux-assets/wd-linux-rust-ui-${VERSION}"
             windows-assets/*.exe
             windows-assets/*.zip
             windows-assets/*.nupkg
