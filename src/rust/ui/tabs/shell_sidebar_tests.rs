@@ -190,6 +190,7 @@ fn upgrade_badge_action_strings_present_in_both_languages() {
         UiTextKey::UpdateCancel,
         UiTextKey::UpdateDownloading,
         UiTextKey::UpdateStarted,
+        UiTextKey::UpdateStartedHover,
         UiTextKey::UpdateFailed,
         UiTextKey::UpdateBlockedLocalOnly,
     ] {

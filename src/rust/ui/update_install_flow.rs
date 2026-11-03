@@ -225,9 +225,14 @@ impl UpdateLauncher for SystemUpdateLauncher {
 }
 
 impl WhisperDictateApp {
-    /// Open the confirmation dialog for `run`.
+    /// Open the confirmation dialog for `run`. Only an idle or failed flow
+    /// accepts a request: once a download is running or an updater has been
+    /// launched, another click must not start a second, competing update.
     pub(in crate::ui) fn request_update_install(&mut self, run: UpdateRun) {
-        if !matches!(self.update_install, UpdateInstallState::Downloading(_)) {
+        if matches!(
+            self.update_install,
+            UpdateInstallState::Idle | UpdateInstallState::Failed(_)
+        ) {
             self.update_install = UpdateInstallState::Confirming(run);
         }
     }
@@ -240,10 +245,15 @@ impl WhisperDictateApp {
     }
 
     /// Run the confirmed update, unless local-only mode forbids network
-    /// access.
+    /// access. Outside `Confirming` (no open dialog, a running download, a
+    /// launched updater) it leaves the state untouched and launches nothing.
     pub(in crate::ui) fn confirm_update_install(&mut self, launcher: &dyn UpdateLauncher) {
-        let UpdateInstallState::Confirming(run) = std::mem::take(&mut self.update_install) else {
-            return;
+        let run = match std::mem::take(&mut self.update_install) {
+            UpdateInstallState::Confirming(run) => run,
+            other => {
+                self.update_install = other;
+                return;
+            }
         };
         if self.settings.local_only || self.local_only_downloads_blocked() {
             let message = ui_text(

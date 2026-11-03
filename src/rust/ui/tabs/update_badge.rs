@@ -168,13 +168,23 @@ impl WhisperDictateApp {
             update_badge_suffix(&self.update_install, copied, &lang),
         );
         // The hover leads with the generic "newer version" note, then spells out
-        // exactly what a click does plus the command / URL it acts on.
-        let hover = format!(
-            "{}\n{}\n{}",
-            ui_text(&lang, UiTextKey::UpdateAvailableHover),
-            ui_text(&lang, update_action_hover_key(&action)),
-            action.target(),
-        );
+        // exactly what a click does plus the command / URL it acts on. Once an
+        // updater has started, a click does nothing and the hover says so.
+        let started = matches!(self.update_install, UpdateInstallState::Started);
+        let hover = if started {
+            format!(
+                "{}\n{}",
+                ui_text(&lang, UiTextKey::UpdateAvailableHover),
+                ui_text(&lang, UiTextKey::UpdateStartedHover),
+            )
+        } else {
+            format!(
+                "{}\n{}\n{}",
+                ui_text(&lang, UiTextKey::UpdateAvailableHover),
+                ui_text(&lang, update_action_hover_key(&action)),
+                action.target(),
+            )
+        };
 
         let response = ui
             .add(
@@ -189,7 +199,11 @@ impl WhisperDictateApp {
             )
             .on_hover_text(hover)
             // A pointing-hand cursor signals the badge is actionable.
-            .on_hover_cursor(egui::CursorIcon::PointingHand);
+            .on_hover_cursor(if started {
+                egui::CursorIcon::Default
+            } else {
+                egui::CursorIcon::PointingHand
+            });
 
         if response.clicked() {
             match action {

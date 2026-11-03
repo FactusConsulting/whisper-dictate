@@ -211,6 +211,8 @@ pub(in crate::ui) enum UiTextKey {
     UpdateDownloading,
     /// Badge suffix after the update console or setup wizard started.
     UpdateStarted,
+    /// Badge hover once an updater has started: further clicks do nothing.
+    UpdateStartedHover,
     /// Prefix of the error line shown under the badge.
     UpdateFailed,
     /// Error shown when local-only mode blocks an update.
@@ -450,6 +452,10 @@ impl UiTextKey {
             UiTextKey::UpdateCancel => "Cancel",
             UiTextKey::UpdateDownloading => "downloading",
             UiTextKey::UpdateStarted => "update started",
+            UiTextKey::UpdateStartedHover => {
+                "An update window is already running, so clicking does nothing. If it was \
+                closed without updating, restart whisper-dictate to try again."
+            }
             UiTextKey::UpdateFailed => "Update failed:",
             UiTextKey::UpdateBlockedLocalOnly => {
                 "Local only is on, so nothing was downloaded. Turn off Local only to update."
@@ -686,6 +692,10 @@ impl UiTextKey {
             UiTextKey::UpdateCancel => "Annullér",
             UiTextKey::UpdateDownloading => "henter",
             UiTextKey::UpdateStarted => "opdatering startet",
+            UiTextKey::UpdateStartedHover => {
+                "Et opdateringsvindue kører allerede, så et klik gør ingenting. Hvis det blev \
+                lukket uden at opdatere, så genstart whisper-dictate for at prøve igen."
+            }
             UiTextKey::UpdateFailed => "Opdateringen mislykkedes:",
             UiTextKey::UpdateBlockedLocalOnly => {
                 "\"Kun lokalt\" er slået til, så intet blev hentet. Slå \"Kun lokalt\" fra \

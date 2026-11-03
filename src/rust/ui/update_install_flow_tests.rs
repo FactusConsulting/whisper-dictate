@@ -220,10 +220,43 @@ fn dismissing_the_dialog_runs_nothing() {
 #[test]
 fn a_click_during_a_download_does_not_reopen_the_dialog() {
     let (mut app, _tx) = downloading_app();
+    let launcher = FakeLauncher::default();
     app.request_update_install(choco_run());
+    app.confirm_update_install(&launcher);
+    assert!(launcher.launched_nothing());
     assert!(matches!(
         app.update_install,
         UpdateInstallState::Downloading(_)
+    ));
+}
+
+#[test]
+fn a_click_after_an_updater_started_launches_nothing_more() {
+    let _lock = crate::test_env_lock::lock_env();
+    let _env = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
+    let mut app = confirming_app(choco_run());
+    let launcher = FakeLauncher::default();
+    app.confirm_update_install(&launcher);
+    assert!(matches!(app.update_install, UpdateInstallState::Started));
+
+    // A second click, then a confirm (as the dialog's button would do), must
+    // not reopen the dialog or start a competing console.
+    app.request_update_install(choco_run());
+    assert!(matches!(app.update_install, UpdateInstallState::Started));
+    app.confirm_update_install(&launcher);
+
+    assert_eq!(launcher.consoles.borrow().len(), 1);
+    assert!(matches!(app.update_install, UpdateInstallState::Started));
+}
+
+#[test]
+fn a_click_after_a_failure_reopens_the_dialog() {
+    let mut app = test_app(AppSettings::default());
+    app.update_install = UpdateInstallState::Failed("cancelled".to_owned());
+    app.request_update_install(installer_run());
+    assert!(matches!(
+        app.update_install,
+        UpdateInstallState::Confirming(_)
     ));
 }
 
