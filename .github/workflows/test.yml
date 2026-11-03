@@ -45,8 +45,8 @@ jobs:
   # repository-policy job still runs for documentation and policy surfaces.
   # On push to main / workflow_call the path outputs default to true; path
   # filtering is PR-scoped only. A release-version-only change (see the
-  # `version` step) turns the rust, repo_tests and audit outputs off on pull
-  # requests and main pushes.
+  # `version` step) turns the rust and audit outputs off on pull requests and
+  # main pushes; repository-policy coverage still runs for it.
   #
   # Required-status-check semantics:
   # - Matrix jobs (`smoke`, `rust`) gate via STEP-LEVEL `if:` so the matrix
@@ -72,9 +72,10 @@ jobs:
       # push: the filter step would have nothing to diff against and the
       # downstream `Fail required check` step would fire.
       # Repository-policy tests inspect the native package, docs and workflows;
-      # they are not product runtime code.
+      # they are not product runtime code. They still run on a version-only
+      # change, which touches the Nix package and Cargo manifests they cover.
       rust: ${{ steps.version.outputs.version_only == 'true' && 'false' || github.event_name == 'pull_request' && steps.filter.outputs.rust || 'true' }}
-      repo_tests: ${{ steps.version.outputs.version_only == 'true' && 'false' || github.event_name == 'pull_request' && steps.filter.outputs.repo_tests || 'true' }}
+      repo_tests: ${{ github.event_name == 'pull_request' && steps.filter.outputs.repo_tests || 'true' }}
       ci_image: ${{ github.event_name == 'pull_request' && steps.filter.outputs.ci_image || 'true' }}
       audit: ${{ github.event_name == 'workflow_call' && 'true' || steps.version.outputs.version_only == 'true' && 'false' || steps.filter.outputs.audit || 'false' }}
     steps:
@@ -197,7 +198,7 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: arc-runner-public
     env:
-      RUN_UNIT: ${{ needs.changes.result == 'success' && needs.changes.outputs.repo_tests == 'true' }}
+      RUN_UNIT: ${{ needs.changes.result == 'success' && (needs.changes.outputs.repo_tests == 'true' || github.event_name != 'pull_request') }}
     steps:
       - name: Fail required check if change detection broke
         if: needs.changes.result != 'success'

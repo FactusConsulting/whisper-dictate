@@ -567,10 +567,11 @@ fn cargo_audit_workflow_validates_the_full_locked_graph_and_policy() {
 }
 
 /// A release-version-only change (`scripts/ci/version-only-change.sh`) turns
-/// the rust, repo_tests and audit outputs off, and each heavy job gates on
-/// those outputs alone, so the bump's pull request and main push both skip
-/// them while every required context still reports. Tag releases and manual
-/// runs never take that path.
+/// the rust and audit outputs off, and each heavy job gates on those outputs
+/// alone, so the bump's pull request and main push both skip them while every
+/// required context still reports. Repository-policy coverage (`unit`) still
+/// runs, because a bump touches the Nix package and Cargo manifests. Tag
+/// releases and manual runs never take the version-only path.
 #[test]
 fn version_only_changes_skip_heavy_jobs_on_pull_requests_and_main_pushes() {
     let workflow = read_repo(".github/workflows/test.yml").replace("\r\n", "\n");
@@ -590,14 +591,19 @@ fn version_only_changes_skip_heavy_jobs_on_pull_requests_and_main_pushes() {
     ] {
         assert!(changes.contains(wiring), "changes job lacks {wiring:?}");
     }
-    for output in ["rust", "repo_tests"] {
-        let expression = format!(
-            "{output}: ${{{{ steps.version.outputs.version_only == 'true' && 'false' || github.event_name == 'pull_request' && steps.filter.outputs.{output} || 'true' }}}}"
-        );
-        assert!(changes.contains(&expression), "missing {expression:?}");
-    }
+    assert!(changes.contains(
+        "rust: ${{ steps.version.outputs.version_only == 'true' && 'false' || github.event_name == 'pull_request' && steps.filter.outputs.rust || 'true' }}"
+    ));
+    assert!(
+        changes.contains(
+            "repo_tests: ${{ github.event_name == 'pull_request' && steps.filter.outputs.repo_tests || 'true' }}"
+        ),
+        "repository-policy coverage must not depend on the version-only verdict"
+    );
+    assert!(workflow.contains(
+        "RUN_UNIT: ${{ needs.changes.result == 'success' && (needs.changes.outputs.repo_tests == 'true' || github.event_name != 'pull_request') }}"
+    ));
     for gate in [
-        "RUN_UNIT: ${{ needs.changes.result == 'success' && needs.changes.outputs.repo_tests == 'true' }}",
         "RUN_LEGACY_INSTALLER: ${{ needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}",
         "RUN_SMOKE: ${{ needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}",
         "RUN_RUST: ${{ needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}",
@@ -606,15 +612,10 @@ fn version_only_changes_skip_heavy_jobs_on_pull_requests_and_main_pushes() {
     ] {
         assert!(workflow.contains(gate), "missing output-only gate {gate:?}");
     }
-    for bypass in [
-        "outputs.rust == 'true' || github.event_name",
-        "outputs.repo_tests == 'true' || github.event_name",
-    ] {
-        assert!(
-            !workflow.contains(bypass),
-            "an event-name bypass would run heavy jobs on a version-only push: {bypass:?}"
-        );
-    }
+    assert!(
+        !workflow.contains("outputs.rust == 'true' || github.event_name"),
+        "an event-name bypass would run heavy jobs on a version-only push"
+    );
 }
 
 #[test]
