@@ -49,21 +49,45 @@ pub(super) fn painted_texts_at(
     app: &mut WhisperDictateApp,
     screen: egui::Vec2,
 ) -> Vec<PaintedText> {
+    painted_texts_after_frames(app, screen, 1)
+}
+
+/// Like [`rendered_texts`], but renders `frames` frames on one context and
+/// returns the last frame's text. Modals and other areas lay themselves out
+/// invisibly on the frame they first appear, so they need a second frame.
+pub(super) fn rendered_texts_after_frames(
+    app: &mut WhisperDictateApp,
+    frames: usize,
+) -> HashSet<String> {
+    painted_texts_after_frames(app, egui::vec2(1400.0, 40_000.0), frames)
+        .into_iter()
+        .map(|painted| painted.text)
+        .collect()
+}
+
+fn painted_texts_after_frames(
+    app: &mut WhisperDictateApp,
+    screen: egui::Vec2,
+    frames: usize,
+) -> Vec<PaintedText> {
     let ctx = egui::Context::default();
     let mut frame = eframe::Frame::_new_kittest();
-    let input = egui::RawInput {
-        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, screen)),
-        ..Default::default()
-    };
-    let mut output = ctx.run_ui(input, |ui| {
-        eframe::App::ui(app, ui, &mut frame);
-    });
-    // No real painter consumes this headless frame, so drop the pending
-    // font-atlas texture delta explicitly instead of letting `TexturesDelta`
-    // debug-assert on an unapplied delta at drop time.
-    output.textures_delta.clear();
     let mut texts = Vec::new();
-    collect_shapes(&output.shapes, &mut texts);
+    for _ in 0..frames {
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, screen)),
+            ..Default::default()
+        };
+        let mut output = ctx.run_ui(input, |ui| {
+            eframe::App::ui(app, ui, &mut frame);
+        });
+        // No real painter consumes this headless frame, so drop the pending
+        // font-atlas texture delta explicitly instead of letting `TexturesDelta`
+        // debug-assert on an unapplied delta at drop time.
+        output.textures_delta.clear();
+        texts.clear();
+        collect_shapes(&output.shapes, &mut texts);
+    }
     texts
 }
 

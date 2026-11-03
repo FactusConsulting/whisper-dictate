@@ -3,10 +3,13 @@
 //!
 //! All logic here is PURE and unit-tested: given the running executable's path
 //! and the host OS, [`detect_install_method`] classifies HOW this instance was
-//! installed, and [`upgrade_action`] maps that to the concrete thing the UI
-//! offers — a copyable upgrade command, or a release-page URL to download a new
-//! installer/zip. The thin, untestable shell (reading `current_exe()`, copying
-//! to the clipboard, opening the URL) lives in the sidebar render code.
+//! installed, and [`upgrade_action`] maps that to what a badge click does — run
+//! the update in-app (Windows Chocolatey / winget / installer), copy an upgrade
+//! command (Nix / Homebrew), or open a release page. The thin shell (reading
+//! `current_exe()`, the confirmation dialog, clipboard, launches) lives in
+//! `tabs/update_badge.rs` and `update_install_flow.rs`.
+
+use super::update_install::{normalize_version, ConsoleUpdate, UpdateRun};
 
 /// Host operating system, passed in so [`detect_install_method`] stays pure and
 /// testable on any platform (the path rules differ per OS).
@@ -52,26 +55,18 @@ pub(in crate::ui) enum InstallMethod {
 }
 
 /// The action the badge performs for a given install method.
-///
-/// A typed enum (rather than a bare string) lets the UI render two distinct
-/// affordances: `Command` is copied to the clipboard so the user can paste-and-
-/// run it; `OpenUrl` opens the release page so the user downloads a fresh
-/// installer/zip.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(in crate::ui) enum UpgradeAction {
     /// A shell command to copy to the clipboard and run.
     Command(String),
-    /// A URL to open (the latest-release page).
+    /// A URL to open (a release page).
     OpenUrl(String),
+    /// An update the app runs itself after a confirmation.
+    Run(UpdateRun),
 }
 
-/// The winget package identifier, confirmed from
-/// `packaging/windows/winget/FactusConsulting.WhisperDictate.yaml`
-/// (`PackageIdentifier: FactusConsulting.WhisperDictate`).
-const WINGET_PACKAGE_ID: &str = "FactusConsulting.WhisperDictate";
-
-/// The latest-release page. Installer/portable users download the new
-/// installer/zip from here. NOTE: `releases/latest` resolves to the newest
+/// The latest-release page. Portable users download the new zip from here.
+/// NOTE: `releases/latest` resolves to the newest
 /// FINAL release and EXCLUDES prereleases, so a prerelease offer must instead
 /// link the specific tag (see [`release_tag_url`]).
 const RELEASES_LATEST_URL: &str =
@@ -89,7 +84,7 @@ pub(in crate::ui) const RELEASES_INDEX_URL: &str =
 /// version is normalized to a single leading `v` (the feed may carry it with or
 /// without one). Pure / unit-tested.
 pub(in crate::ui) fn release_tag_url(version: &str) -> String {
-    let v = version.trim().trim_start_matches('v');
+    let v = normalize_version(version);
     format!("https://github.com/FactusConsulting/whisper-dictate/releases/tag/v{v}")
 }
 
@@ -165,76 +160,56 @@ pub(in crate::ui) fn detect_install_method(
 
 /// Map an install method to the concrete upgrade action the badge offers.
 ///
-/// Pure / unit-tested. Command strings are the exact paste-and-run commands;
-/// the Choco source name matches the project's feed (`--source=whisper-dictate`)
-/// and the winget id matches the published manifest.
+/// Pure / unit-tested. `offered_version` is the version string the badge is
+/// offering and `offered_is_prerelease` whether it is an `-rc.N` pre-release.
 ///
-/// `offered_version` is the version string the badge is offering and
-/// `offered_is_prerelease` whether it is an `-rc.N` pre-release. When the offer
-/// is a prerelease, the behaviour adapts:
-/// - Choco: add `--prerelease` and pin `--version=<offered_version>` so the
-///   exact rc is installed (Chocolatey otherwise upgrades to the newest STABLE).
-/// - Every other method (winget / nix / brew / installer / portable): the
-///   published winget manifest, the flake, and the Homebrew formula track FINAL
-///   releases only, and `releases/latest` excludes prereleases — so point the
-///   user at the rc's specific tag page to download the matching artifact.
-///
-/// Chocolatey always pins the offered version. This makes the copied command
-/// auditable and prevents its package source from selecting a later package
-/// than the version the UI displayed.
+/// - Choco: run `choco upgrade` from the project's feed
+///   (`--source=whisper-dictate`), pinned to the offered version so the
+///   source cannot select a later package than the UI displayed. A prerelease
+///   offer adds `--prerelease`, without which Chocolatey ignores `-rc.N`.
+/// - Installer: download the offered version's own setup executable (the rc's
+///   assets for a prerelease offer) and run it.
+/// - Winget: run `winget upgrade` for the published id. The winget manifest
+///   carries finals only, so a prerelease offer links the rc's tag page.
+/// - Nix / Brew: copy the upgrade command; prerelease offers link the rc's tag
+///   page because the flake and the Homebrew formula track finals.
+/// - Portable: open `releases/latest`, or the rc's tag page for a prerelease
+///   (`releases/latest` excludes prereleases).
 pub(in crate::ui) fn upgrade_action(
     method: InstallMethod,
     offered_version: &str,
     offered_is_prerelease: bool,
 ) -> UpgradeAction {
-    // A prerelease offer can only be satisfied by Chocolatey's --prerelease flag
-    // or a direct download; package managers that track finals send the user to
-    // the rc's tag page instead.
-    if offered_is_prerelease {
-        return match method {
-            InstallMethod::Choco => UpgradeAction::Command(format!(
-                "choco upgrade whisper-dictate --source=whisper-dictate --prerelease --version={} -y",
-                offered_version.trim().trim_start_matches('v')
-            )),
-            InstallMethod::Winget
-            | InstallMethod::Nix
-            | InstallMethod::Brew
-            | InstallMethod::Installer
-            | InstallMethod::Portable => UpgradeAction::OpenUrl(release_tag_url(offered_version)),
-        };
-    }
-
+    let version = normalize_version(offered_version).to_owned();
     match method {
-        InstallMethod::Choco => UpgradeAction::Command(format!(
-            "choco upgrade whisper-dictate --source=whisper-dictate --version={} -y",
-            offered_version.trim().trim_start_matches('v')
-        )),
-        InstallMethod::Winget => {
-            UpgradeAction::Command(format!("winget upgrade {WINGET_PACKAGE_ID}"))
-        }
+        InstallMethod::Choco => UpgradeAction::Run(UpdateRun::Console(ConsoleUpdate::Choco {
+            version,
+            prerelease: offered_is_prerelease,
+        })),
+        InstallMethod::Installer => UpgradeAction::Run(UpdateRun::Installer { version }),
+        _ if offered_is_prerelease => UpgradeAction::OpenUrl(release_tag_url(offered_version)),
+        InstallMethod::Winget => UpgradeAction::Run(UpdateRun::Console(ConsoleUpdate::Winget)),
         // The flake-URL form matches the documented Nix install command
         // (`nix profile install github:FactusConsulting/whisper-dictate`) so the
         // upgrade resolves the same flake reference.
         InstallMethod::Nix => UpgradeAction::Command(
             "nix profile upgrade github:FactusConsulting/whisper-dictate".to_owned(),
         ),
-        // The new Homebrew formula is pulled then upgraded.
         InstallMethod::Brew => UpgradeAction::Command("brew upgrade whisper-dictate".to_owned()),
         // No package manager owns this install: send the user to the release page
-        // to fetch the new installer/zip.
-        InstallMethod::Installer | InstallMethod::Portable => {
-            UpgradeAction::OpenUrl(RELEASES_LATEST_URL.to_owned())
-        }
+        // to fetch the new zip.
+        InstallMethod::Portable => UpgradeAction::OpenUrl(RELEASES_LATEST_URL.to_owned()),
     }
 }
 
 impl UpgradeAction {
-    /// The inner string the click acts on — the command to copy, or the URL to
-    /// open. Used by the badge's hover text so the user sees the exact target.
-    pub(in crate::ui) fn target(&self) -> &str {
+    /// What the click acts on — the command to copy, the URL to open, or what
+    /// the in-app update runs or downloads. Shown in the badge hover.
+    pub(in crate::ui) fn target(&self) -> String {
         match self {
-            UpgradeAction::Command(cmd) => cmd,
-            UpgradeAction::OpenUrl(url) => url,
+            UpgradeAction::Command(cmd) => cmd.clone(),
+            UpgradeAction::OpenUrl(url) => url.clone(),
+            UpgradeAction::Run(run) => run.target(),
         }
     }
 }
@@ -393,29 +368,39 @@ mod tests {
 
     // ── upgrade_action ───────────────────────────────────────────────────────
 
-    // Final offers pin the version for Chocolatey; the version is inert for the
-    // other install methods.
+    // Final offers pin the version for Chocolatey and the installer download;
+    // the version is inert for the other install methods.
     fn final_action(method: InstallMethod) -> UpgradeAction {
         upgrade_action(method, "1.10.0", false)
     }
 
     #[test]
-    fn choco_maps_to_command_with_feed_source_and_offered_version() {
+    fn choco_runs_pinned_upgrade_from_the_feed() {
+        let action = final_action(InstallMethod::Choco);
         assert_eq!(
-            final_action(InstallMethod::Choco),
-            UpgradeAction::Command(
-                "choco upgrade whisper-dictate --source=whisper-dictate --version=1.10.0 -y"
-                    .to_owned()
-            )
+            action,
+            UpgradeAction::Run(UpdateRun::Console(ConsoleUpdate::Choco {
+                version: "1.10.0".to_owned(),
+                prerelease: false,
+            }))
+        );
+        assert_eq!(
+            action.target(),
+            "choco upgrade whisper-dictate --source=whisper-dictate --version=1.10.0 -y"
         );
     }
 
     #[test]
-    fn winget_maps_to_command_with_correct_package_id() {
+    fn winget_runs_exact_upgrade_of_the_published_id() {
         // The id must match packaging/windows/winget/*.yaml.
+        let action = final_action(InstallMethod::Winget);
         assert_eq!(
-            final_action(InstallMethod::Winget),
-            UpgradeAction::Command("winget upgrade FactusConsulting.WhisperDictate".to_owned())
+            action,
+            UpgradeAction::Run(UpdateRun::Console(ConsoleUpdate::Winget))
+        );
+        assert_eq!(
+            action.target(),
+            "winget upgrade --id FactusConsulting.WhisperDictate --exact"
         );
     }
 
@@ -438,12 +423,18 @@ mod tests {
     }
 
     #[test]
-    fn installer_maps_to_release_url() {
+    fn installer_downloads_the_offered_setup_executable() {
+        let action = final_action(InstallMethod::Installer);
         assert_eq!(
-            final_action(InstallMethod::Installer),
-            UpgradeAction::OpenUrl(
-                "https://github.com/FactusConsulting/whisper-dictate/releases/latest".to_owned()
-            )
+            action,
+            UpgradeAction::Run(UpdateRun::Installer {
+                version: "1.10.0".to_owned()
+            })
+        );
+        assert_eq!(
+            action.target(),
+            "https://github.com/FactusConsulting/whisper-dictate/releases/download/v1.10.0/\
+             whisper-dictate-windows-setup-1.10.0.exe"
         );
     }
 
@@ -461,13 +452,18 @@ mod tests {
 
     #[test]
     fn choco_prerelease_offer_adds_flag_and_pins_version() {
+        let action = upgrade_action(InstallMethod::Choco, "1.10.0-rc.2", true);
         assert_eq!(
-            upgrade_action(InstallMethod::Choco, "1.10.0-rc.2", true),
-            UpgradeAction::Command(
-                "choco upgrade whisper-dictate --source=whisper-dictate --prerelease \
-                 --version=1.10.0-rc.2 -y"
-                    .to_owned()
-            )
+            action,
+            UpgradeAction::Run(UpdateRun::Console(ConsoleUpdate::Choco {
+                version: "1.10.0-rc.2".to_owned(),
+                prerelease: true,
+            }))
+        );
+        assert_eq!(
+            action.target(),
+            "choco upgrade whisper-dictate --source=whisper-dictate --prerelease \
+             --version=1.10.0-rc.2 -y"
         );
     }
 
@@ -475,25 +471,37 @@ mod tests {
     fn choco_prerelease_offer_strips_leading_v_in_pin() {
         // A feed entry with a leading `v` must not double up in --version.
         assert_eq!(
-            upgrade_action(InstallMethod::Choco, "v1.10.0-rc.1", true),
-            UpgradeAction::Command(
-                "choco upgrade whisper-dictate --source=whisper-dictate --prerelease \
-                 --version=1.10.0-rc.1 -y"
-                    .to_owned()
-            )
+            upgrade_action(InstallMethod::Choco, "v1.10.0-rc.1", true).target(),
+            "choco upgrade whisper-dictate --source=whisper-dictate --prerelease \
+             --version=1.10.0-rc.1 -y"
         );
     }
 
     #[test]
-    fn non_choco_prerelease_offer_points_at_tag_url() {
-        // winget / nix / brew / installer / portable all track finals or skip
-        // prereleases, so a prerelease offer links the specific rc tag.
+    fn installer_prerelease_offer_downloads_the_rc_assets() {
+        let action = upgrade_action(InstallMethod::Installer, "v1.10.0-rc.2", true);
+        assert_eq!(
+            action,
+            UpgradeAction::Run(UpdateRun::Installer {
+                version: "1.10.0-rc.2".to_owned()
+            })
+        );
+        assert_eq!(
+            action.target(),
+            "https://github.com/FactusConsulting/whisper-dictate/releases/download/v1.10.0-rc.2/\
+             whisper-dictate-windows-setup-1.10.0-rc.2.exe"
+        );
+    }
+
+    #[test]
+    fn finals_only_prerelease_offer_points_at_tag_url() {
+        // winget / nix / brew / portable track finals or skip prereleases, so a
+        // prerelease offer links the specific rc tag.
         let tag = "https://github.com/FactusConsulting/whisper-dictate/releases/tag/v1.10.0-rc.2";
         for method in [
             InstallMethod::Winget,
             InstallMethod::Nix,
             InstallMethod::Brew,
-            InstallMethod::Installer,
             InstallMethod::Portable,
         ] {
             assert_eq!(
@@ -517,10 +525,10 @@ mod tests {
     }
 
     #[test]
-    fn target_returns_inner_string_for_both_variants() {
+    fn target_returns_inner_string_for_copy_and_open() {
         assert_eq!(
-            UpgradeAction::Command("winget upgrade x".to_owned()).target(),
-            "winget upgrade x"
+            UpgradeAction::Command("brew upgrade x".to_owned()).target(),
+            "brew upgrade x"
         );
         assert_eq!(
             UpgradeAction::OpenUrl("https://example/latest".to_owned()).target(),

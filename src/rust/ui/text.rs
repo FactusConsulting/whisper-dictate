@@ -178,12 +178,43 @@ pub(in crate::ui) enum UiTextKey {
     /// upgrade command; followed by the command on its own line. Tells the user a
     /// click copies it.
     UpdateCopyCommandHover,
-    /// Hover prefix on the update badge when the install method has no package
-    /// manager (installer / portable); followed by the release URL. Tells the
-    /// user a click opens the release page.
+    /// Hover prefix on the update badge when a click opens a release page
+    /// (portable builds, and prerelease offers for package managers that carry
+    /// finals only); followed by the URL.
     UpdateOpenReleaseHover,
     /// Transient confirmation shown after the upgrade command is copied.
     UpdateCommandCopied,
+    /// Hover prefix on the update badge for a Chocolatey install; followed by
+    /// the command the elevated console runs.
+    UpdateRunChocoHover,
+    /// Hover prefix on the update badge for a winget install; followed by the
+    /// command the console runs.
+    UpdateRunWingetHover,
+    /// Hover prefix on the update badge for an installer install; followed by
+    /// the setup executable's download URL.
+    UpdateRunInstallerHover,
+    /// Title of the update confirmation dialog.
+    UpdateConfirmTitle,
+    /// Confirmation dialog warning that the app closes during the update.
+    UpdateConfirmClosesApp,
+    /// Confirmation dialog detail for a Chocolatey update.
+    UpdateConfirmChoco,
+    /// Confirmation dialog detail for a winget update.
+    UpdateConfirmWinget,
+    /// Confirmation dialog detail for an installer download.
+    UpdateConfirmInstaller,
+    /// Confirmation dialog button that runs the update.
+    UpdateConfirmButton,
+    /// Confirmation dialog button that closes it without updating.
+    UpdateCancel,
+    /// Badge suffix while the installer downloads; followed by the progress.
+    UpdateDownloading,
+    /// Badge suffix after the update console or setup wizard started.
+    UpdateStarted,
+    /// Prefix of the error line shown under the badge.
+    UpdateFailed,
+    /// Error shown when local-only mode blocks an update.
+    UpdateBlockedLocalOnly,
     /// System-tray icon hover tooltip — no worker running (grey dot).
     TrayTipNotRunning,
     /// System-tray icon hover tooltip — worker ready, mic idle (green dot).
@@ -326,7 +357,8 @@ impl UiTextKey {
                 "Periodically check whether a newer version has been published and show a \
                 discreet \"update available\" badge next to the version in the sidebar. \
                 PRIVACY: this only fetches the public version list from GitHub (github.io) \
-                and sends NO data, telemetry, or identifiers anywhere. \
+                and sends NO data, telemetry, or identifiers anywhere. An update is only \
+                downloaded when you click the badge and confirm. \
                 Also settable via the VOICEPI_UPDATE_CHECK environment variable. \
                 Skipped automatically when \"Local only\" is enabled."
             }
@@ -385,9 +417,43 @@ impl UiTextKey {
             }
             UiTextKey::UpdateCopyCommandHover => "Click to copy the upgrade command:",
             UiTextKey::UpdateOpenReleaseHover => {
-                "Click to open the latest release and download the new installer:"
+                "Click to open the release page and download the new version:"
             }
             UiTextKey::UpdateCommandCopied => "Copied!",
+            UiTextKey::UpdateRunChocoHover => {
+                "Click to update now. Runs this command in an administrator PowerShell window:"
+            }
+            UiTextKey::UpdateRunWingetHover => {
+                "Click to update now. Runs this command in a PowerShell window:"
+            }
+            UiTextKey::UpdateRunInstallerHover => {
+                "Click to update now. Downloads this installer, verifies its SHA-256 \
+                checksum, and opens the setup wizard:"
+            }
+            UiTextKey::UpdateConfirmTitle => "Update whisper-dictate",
+            UiTextKey::UpdateConfirmClosesApp => {
+                "whisper-dictate closes during the update. Unsaved settings are lost."
+            }
+            UiTextKey::UpdateConfirmChoco => {
+                "Windows asks for administrator rights, then a PowerShell window runs \
+                Chocolatey. whisper-dictate starts again when the update finishes."
+            }
+            UiTextKey::UpdateConfirmWinget => {
+                "A PowerShell window runs winget. whisper-dictate starts again when the \
+                update finishes."
+            }
+            UiTextKey::UpdateConfirmInstaller => {
+                "The installer is downloaded from GitHub and its SHA-256 checksum is \
+                verified. The setup wizard then opens and offers to start the new version."
+            }
+            UiTextKey::UpdateConfirmButton => "Update now",
+            UiTextKey::UpdateCancel => "Cancel",
+            UiTextKey::UpdateDownloading => "downloading",
+            UiTextKey::UpdateStarted => "update started",
+            UiTextKey::UpdateFailed => "Update failed:",
+            UiTextKey::UpdateBlockedLocalOnly => {
+                "Local only is on, so nothing was downloaded. Turn off Local only to update."
+            }
             UiTextKey::TrayTipNotRunning => "whisper-dictate — not started",
             UiTextKey::TrayTipReady => "whisper-dictate — ready",
             UiTextKey::TrayTipRecording => "whisper-dictate — recording",
@@ -526,7 +592,8 @@ impl UiTextKey {
                 diskret \"opdatering tilgængelig\"-mærke ved versionen i sidepanelet. \
                 PRIVATLIV: dette henter kun den offentlige versionsliste fra GitHub \
                 (github.io) og sender INGEN data, telemetri eller identifikatorer nogen \
-                steder. Kan også sættes via miljøvariablen VOICEPI_UPDATE_CHECK. \
+                steder. En opdatering hentes kun, når du klikker på mærket og bekræfter. \
+                Kan også sættes via miljøvariablen VOICEPI_UPDATE_CHECK. \
                 Springes automatisk over når \"Kun lokalt\" er slået til."
             }
             UiTextKey::UpdateCheckInterval => "Interval for opdateringstjek (minutter)",
@@ -584,9 +651,46 @@ impl UiTextKey {
             }
             UiTextKey::UpdateCopyCommandHover => "Klik for at kopiere opdateringskommandoen:",
             UiTextKey::UpdateOpenReleaseHover => {
-                "Klik for at åbne seneste udgivelse og hente den nye installer:"
+                "Klik for at åbne udgivelsessiden og hente den nye version:"
             }
             UiTextKey::UpdateCommandCopied => "Kopieret!",
+            UiTextKey::UpdateRunChocoHover => {
+                "Klik for at opdatere nu. Kører denne kommando i et PowerShell-vindue \
+                som administrator:"
+            }
+            UiTextKey::UpdateRunWingetHover => {
+                "Klik for at opdatere nu. Kører denne kommando i et PowerShell-vindue:"
+            }
+            UiTextKey::UpdateRunInstallerHover => {
+                "Klik for at opdatere nu. Henter denne installer, kontrollerer dens \
+                SHA-256-kontrolsum og åbner installationsguiden:"
+            }
+            UiTextKey::UpdateConfirmTitle => "Opdatér whisper-dictate",
+            UiTextKey::UpdateConfirmClosesApp => {
+                "whisper-dictate lukkes under opdateringen. Ikke-gemte indstillinger går tabt."
+            }
+            UiTextKey::UpdateConfirmChoco => {
+                "Windows beder om administratorrettigheder, og derefter kører Chocolatey \
+                i et PowerShell-vindue. whisper-dictate starter igen, når opdateringen \
+                er færdig."
+            }
+            UiTextKey::UpdateConfirmWinget => {
+                "Et PowerShell-vindue kører winget. whisper-dictate starter igen, når \
+                opdateringen er færdig."
+            }
+            UiTextKey::UpdateConfirmInstaller => {
+                "Installeren hentes fra GitHub, og dens SHA-256-kontrolsum kontrolleres. \
+                Derefter åbner installationsguiden og tilbyder at starte den nye version."
+            }
+            UiTextKey::UpdateConfirmButton => "Opdatér nu",
+            UiTextKey::UpdateCancel => "Annullér",
+            UiTextKey::UpdateDownloading => "henter",
+            UiTextKey::UpdateStarted => "opdatering startet",
+            UiTextKey::UpdateFailed => "Opdateringen mislykkedes:",
+            UiTextKey::UpdateBlockedLocalOnly => {
+                "\"Kun lokalt\" er slået til, så intet blev hentet. Slå \"Kun lokalt\" fra \
+                for at opdatere."
+            }
             UiTextKey::TrayTipNotRunning => "whisper-dictate — ikke startet",
             UiTextKey::TrayTipReady => "whisper-dictate — klar",
             UiTextKey::TrayTipRecording => "whisper-dictate — optager",

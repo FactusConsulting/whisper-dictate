@@ -136,6 +136,7 @@ impl WhisperDictateApp {
         self.poll_corpus_batch();
         self.ensure_audio_devices_loaded();
         self.poll_update_check();
+        self.poll_update_install(ctx, &SystemUpdateLauncher);
         self.runtime_log_cache.sync_if_needed(&self.runtime_log);
         let mouse_passthrough = injection_viewport_mouse_passthrough(self.pipeline_stage);
         if mouse_passthrough != self.injection_viewport_mouse_passthrough {

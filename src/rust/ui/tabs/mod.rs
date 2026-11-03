@@ -57,6 +57,9 @@ mod system_advanced_tests;
 mod system_tests;
 mod top_status_layout;
 mod update_badge;
+#[cfg(test)]
+#[path = "update_badge_tests.rs"]
+mod update_badge_tests;
 mod whisper_model_setup;
 #[cfg(test)]
 #[path = "whisper_model_setup_tests.rs"]

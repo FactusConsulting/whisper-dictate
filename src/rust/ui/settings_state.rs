@@ -155,6 +155,11 @@ impl WhisperDictateApp {
                         self.settings_status.push_str(&message);
                         self.append_runtime_log(format!("[ui] {message}"));
                     }
+                    if self.cancel_update_download_for_local_only() {
+                        self.append_runtime_log(
+                            "[ui] update: download cancelled for local-only mode",
+                        );
+                    }
                 }
                 if let Some(message) = key_message {
                     self.settings_status.push_str(" | ");

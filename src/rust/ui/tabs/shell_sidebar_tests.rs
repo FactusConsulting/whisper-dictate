@@ -171,15 +171,33 @@ fn update_available_strings_present_in_both_languages() {
 
 #[test]
 fn upgrade_badge_action_strings_present_in_both_languages() {
-    // The new actionable-badge strings (copy-command hover, open-release hover,
-    // and the transient "Copied!" confirmation) must be localized EN+DA.
+    // Every actionable-badge string (hovers, the "Copied!" confirmation, the
+    // update confirmation dialog, and the update progress/error lines) must be
+    // localized EN+DA.
     for key in [
         UiTextKey::UpdateCopyCommandHover,
         UiTextKey::UpdateOpenReleaseHover,
         UiTextKey::UpdateCommandCopied,
+        UiTextKey::UpdateRunChocoHover,
+        UiTextKey::UpdateRunWingetHover,
+        UiTextKey::UpdateRunInstallerHover,
+        UiTextKey::UpdateConfirmTitle,
+        UiTextKey::UpdateConfirmClosesApp,
+        UiTextKey::UpdateConfirmChoco,
+        UiTextKey::UpdateConfirmWinget,
+        UiTextKey::UpdateConfirmInstaller,
+        UiTextKey::UpdateConfirmButton,
+        UiTextKey::UpdateCancel,
+        UiTextKey::UpdateDownloading,
+        UiTextKey::UpdateStarted,
+        UiTextKey::UpdateFailed,
+        UiTextKey::UpdateBlockedLocalOnly,
     ] {
-        assert!(!ui_text("en", key).is_empty(), "EN missing for {key:?}");
-        assert!(!ui_text("da", key).is_empty(), "DA missing for {key:?}");
+        let en = ui_text("en", key);
+        let da = ui_text("da", key);
+        assert!(!en.is_empty(), "EN missing for {key:?}");
+        assert!(!da.is_empty(), "DA missing for {key:?}");
+        assert_ne!(en, da, "DA not translated for {key:?}");
     }
     // Spot-check expected values so a stray edit can't silently swap them.
     assert_eq!(ui_text("en", UiTextKey::UpdateCommandCopied), "Copied!");

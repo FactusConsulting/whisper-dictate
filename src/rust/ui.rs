@@ -90,6 +90,9 @@ mod text_scale;
 mod theme;
 mod tray;
 mod update_check;
+mod update_install;
+mod update_install_flow;
+mod update_install_launch;
 mod upgrade_hint;
 mod whisper_models_state;
 mod widgets;
@@ -127,6 +130,8 @@ pub(in crate::ui) use self::text_scale::*;
 pub(in crate::ui) use self::theme::*;
 pub(in crate::ui) use self::tray::*;
 pub(in crate::ui) use self::update_check::*;
+pub(in crate::ui) use self::update_install::*;
+pub(in crate::ui) use self::update_install_flow::*;
 pub(in crate::ui) use self::upgrade_hint::*;
 pub(in crate::ui) use self::widgets::*;
 pub(in crate::ui) use self::worker_event::*;
@@ -503,6 +508,9 @@ struct WhisperDictateApp {
     /// the update badge after the upgrade command is copied to the clipboard.
     /// Session-only UI state — `None` when no confirmation is pending.
     update_command_copied_until: Option<Instant>,
+    /// The badge's one-click update flow (confirmation, installer download,
+    /// launch result). Session-only UI state.
+    update_install: UpdateInstallState,
     /// Cached result of the one-time check for the Chocolatey package directory
     /// (`%ProgramData%\chocolatey\lib\whisper-dictate` or via `$ChocolateyInstall`).
     /// `None` until the first update badge render runs the probe lazily; the
@@ -657,6 +665,7 @@ impl Default for WhisperDictateApp {
             last_update_check: None,
             update_check_rx: None,
             update_command_copied_until: None,
+            update_install: UpdateInstallState::Idle,
             choco_pkg_dir_exists: None,
             tray: TrayManager::new(),
             last_logged_tray_state: None,
