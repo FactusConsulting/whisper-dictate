@@ -43,8 +43,10 @@ jobs:
   # Compute which categories of files changed so the heavy jobs (Rust matrix,
   # native smoke, integration) can skip themselves while the focused
   # repository-policy job still runs for documentation and policy surfaces.
-  # On push to main / workflow_call every output defaults to true; filtering is
-  # PR-scoped only.
+  # On push to main / workflow_call the path outputs default to true; path
+  # filtering is PR-scoped only. A release-version-only change (see the
+  # `version` step) turns the rust and audit outputs off on pull requests and
+  # main pushes; repository-policy coverage still runs for it.
   #
   # Required-status-check semantics:
   # - Matrix jobs (`smoke`, `rust`) gate via STEP-LEVEL `if:` so the matrix
@@ -70,16 +72,56 @@ jobs:
       # push: the filter step would have nothing to diff against and the
       # downstream `Fail required check` step would fire.
       # Repository-policy tests inspect the native package, docs and workflows;
-      # they are not product runtime code.
-      rust: ${{ github.event_name == 'pull_request' && steps.filter.outputs.rust || 'true' }}
+      # they are not product runtime code. They still run on a version-only
+      # change, which touches the Nix package and Cargo manifests they cover.
+      rust: ${{ steps.version.outputs.version_only == 'true' && 'false' || github.event_name == 'pull_request' && steps.filter.outputs.rust || 'true' }}
       repo_tests: ${{ github.event_name == 'pull_request' && steps.filter.outputs.repo_tests || 'true' }}
       ci_image: ${{ github.event_name == 'pull_request' && steps.filter.outputs.ci_image || 'true' }}
-      audit: ${{ github.event_name == 'workflow_call' && 'true' || steps.filter.outputs.audit || 'false' }}
+      audit: ${{ github.event_name == 'workflow_call' && 'true' || steps.version.outputs.version_only == 'true' && 'false' || steps.filter.outputs.audit || 'false' }}
     steps:
       - uses: actions/checkout@v7
         if: github.event_name != 'workflow_call'
         with:
           ref: ${{ inputs.ref }}
+          # The version step diffs a pull request's merge commit against its
+          # first parent, the base branch tip.
+          fetch-depth: 2
+      # A version-only change leaves every byte of code, workflow, script
+      # and dependency input identical to the base commit; only the
+      # whisper-dictate-app release version string differs (see
+      # scripts/ci/version-only-change.sh). The skipped legs therefore
+      # already ran on that exact code: in the pull request that produced
+      # the base commit, and in the base commit's own push run on main. A
+      # main push is compared with `github.event.before`, the previous main
+      # tip. Tag pushes (the release calling this workflow), manual runs and
+      # any detection error keep the full suite.
+      - name: Detect a release-version-only change
+        id: version
+        if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          base=''
+          if [ "$EVENT_NAME" = pull_request ]; then
+            base=$(git rev-parse --verify --quiet 'HEAD^1') || base=''
+          elif [[ "$PUSH_BEFORE" =~ ^[0-9a-f]{40}$ && ! "$PUSH_BEFORE" =~ ^0+$ ]]; then
+            base=$PUSH_BEFORE
+            git cat-file -e "$base^{commit}" 2>/dev/null \
+              || git fetch --no-tags --depth=1 origin "$base" \
+              || base=''
+          fi
+          version_only=false
+          # The detector comes from the base commit, so a change to it never
+          # certifies itself; a base without it keeps the full suite.
+          detector="$RUNNER_TEMP/version-only-change.sh"
+          if [ -n "$base" ] \
+            && git cat-file blob "$base:scripts/ci/version-only-change.sh" > "$detector" \
+            && verdict=$(bash "$detector" "$base" HEAD); then
+            version_only=$verdict
+          fi
+          echo "version_only=$version_only" >> "$GITHUB_OUTPUT"
+          echo "version-only change: $version_only (base: ${base:-none})"
       # Pin to v4.0.1 (Node 24) — GitHub started defaulting JavaScript
       # actions to Node 24 on June 16, 2026 and the Node 20 runtime is
       # scheduled for removal later in 2026. A Node-20-targeted action
@@ -232,7 +274,7 @@ jobs:
     if: ${{ !cancelled() }}
     runs-on: windows-2025
     env:
-      RUN_LEGACY_INSTALLER: ${{ needs.changes.result == 'success' && (needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request') }}
+      RUN_LEGACY_INSTALLER: ${{ needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}
     steps:
       - name: Fail if change detection broke
         if: needs.changes.result != 'success'
@@ -275,7 +317,7 @@ jobs:
         os: [ubuntu-latest, windows-2025]
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'arc-runner-public' || matrix.os }}
     env:
-      RUN_SMOKE: ${{ needs.changes.result == 'success' && (needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request') }}
+      RUN_SMOKE: ${{ needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}
     steps:
       - name: Fail required check if change detection broke
         if: needs.changes.result != 'success'
@@ -389,8 +431,9 @@ jobs:
       # `rust` output is the per-language gate (issue #590):
       # a docs/config-only PR that doesn't touch Rust sources, workflow YAML,
       # shared config or scripts skips the whole rust matrix (~5-15 min
-      # of wall-clock on Windows). Non-PR events always run.
-      RUN_RUST: ${{ needs.changes.result == 'success' && (needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request') }}
+      # of wall-clock on Windows). Non-PR events run unless the change is a
+      # release-version-only bump.
+      RUN_RUST: ${{ needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}
       # The anchor cell owns the once-per-run checks (fmt, the Windows native
       # GUI smoke, the Windows release-script fixture): `base` on pull
       # requests, `shipping` wherever `base` is excluded. `shipping` is a
@@ -557,7 +600,8 @@ jobs:
         os: [ubuntu-latest, windows-2025]
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'arc-runner-public' || matrix.os }}
     env:
-      # RUN_RELEASE=false when (a) `changes` failed, (b) docs-only PR, OR
+      # RUN_RELEASE=false when (a) `changes` failed, (b) docs-only PR or
+      # release-version-only change, OR
       # (c) this is the ubuntu leg on a pull_request (Linux release build
       # is push/workflow_call only per the header comment above), OR
       # (d) the PR touches no Rust-relevant paths at all (a docs-only
@@ -567,7 +611,7 @@ jobs:
       # PR so the Windows release regression guards keep firing pre-merge.
       RUN_RELEASE: >-
         ${{ needs.changes.result == 'success'
-            && (needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request')
+            && needs.changes.outputs.rust == 'true'
             && (matrix.os == 'windows-2025' || github.event_name != 'pull_request') }}
     steps:
       - name: Fail check if change detection broke
@@ -723,7 +767,7 @@ jobs:
       # policy and doctests are owned by `unit`, so docs/policy-only changes do
       # not start this heavyweight environment suite. Workflow and packaging
       # changes remain in the `rust` filter and still exercise it.
-      RUN_INTEG: ${{ needs.changes.result == 'success' && (needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request') }}
+      RUN_INTEG: ${{ needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}
       FORCE_IMAGE_BUILD: ${{ github.event_name == 'pull_request' && needs.changes.outputs.ci_image == 'true' }}
       IMAGE: ghcr.io/factusconsulting/whisper-dictate-ci-ubuntu2604:latest
     steps:

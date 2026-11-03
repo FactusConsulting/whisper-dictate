@@ -27,6 +27,17 @@ If an unpublished tag fails this check, delete the local and remote tag, merge
 a version-bump PR, then recreate the tag on the corrected commit. Never move a
 tag for an already published release.
 
+Keep a version PR to exactly what `bump-version.ps1` writes. When a pull
+request or main push changes only the release version line in those four files,
+`scripts/ci/version-only-change.sh` marks it version-only and the `tests`
+workflow skips the Rust matrix, smoke, Ubuntu 26.04 integration and
+dependency-audit legs while every required check still reports success: the
+code is byte-identical to the base commit, which already passed them. The
+repository-policy tests in `unit` still run. The bump commit's push run on main
+therefore finishes in minutes, and the
+release preflight can reuse it for the tag. Any other change in the same PR runs
+the full suite.
+
 ## Cut a release candidate (RC)
 
 1. **Bump to the RC version** on a branch and open a version PR:
