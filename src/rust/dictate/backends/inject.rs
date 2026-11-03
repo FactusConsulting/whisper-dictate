@@ -789,10 +789,12 @@ fn inject_via_paste(
         if started_cycle {
             restore_guard.original = current;
             restore_guard.active = true;
-        } else if current
-            .as_ref()
-            .is_some_and(|backup| backup.text() != restore_guard.injected.as_deref())
-        {
+        } else if current.as_ref().is_some_and(|backup| match backup {
+            // Transcript writes are plain text, so a rich selection is always
+            // newer than our previous paste, even when its text matches.
+            ClipboardBackup::Formats { .. } => true,
+            ClipboardBackup::Text(text) => Some(text.as_str()) != restore_guard.injected.as_deref(),
+        }) {
             // The user copied something after our previous paste. That newer
             // selection becomes the canonical backup for the extended cycle.
             restore_guard.original = current;

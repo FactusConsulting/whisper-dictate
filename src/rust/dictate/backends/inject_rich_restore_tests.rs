@@ -85,3 +85,28 @@ fn rich_user_copy_between_overlapping_pastes_becomes_the_restore_target() {
         "the pre-burst text must not be restored over the newer rich copy"
     );
 }
+
+/// Transcript writes are plain text, so a rich selection is always the
+/// user's newer copy, even when its plain-text form equals the transcript.
+#[test]
+fn rich_user_copy_matching_the_transcript_text_becomes_the_restore_target() {
+    let fake = RecordingBackend::new();
+    let clipboard = RecordingClipboard::with_initial(Some("original"));
+    let handle = clipboard.clone();
+    let backend = backend_with_clipboard_and_delay(
+        InjectMethod::Paste(Some(PasteShortcut::CtrlV)),
+        fake,
+        clipboard,
+        Duration::from_millis(100),
+    );
+
+    backend.inject("first").expect("first paste ok");
+    handle.simulate_rich_copy(Some("first"), formats(b"<b>first</b>"));
+    backend.inject("second").expect("second paste ok");
+
+    assert_eq!(
+        wait_for_format_restore(&handle),
+        vec![formats(b"<b>first</b>")]
+    );
+    assert_eq!(handle.snapshot_writes(), ["first", "second"]);
+}
