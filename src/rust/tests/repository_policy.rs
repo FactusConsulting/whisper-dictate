@@ -1314,6 +1314,7 @@ fn sonar_coverage_keeps_windows_release_helpers_under_rule_analysis() {
         .collect::<Vec<_>>();
     let helpers = [
         "scripts/windows/build-release-binaries.ps1",
+        "scripts/windows/install-vulkan-sdk.ps1",
         "scripts/windows/tests/smoke-controller.ps1",
         "scripts/windows/tests/smoke-gui-launch.ps1",
         "scripts/windows/tests/smoke-installed-layout.ps1",
