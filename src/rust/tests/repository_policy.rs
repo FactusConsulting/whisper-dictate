@@ -611,7 +611,7 @@ fn ci_validation_jobs_have_single_owners_and_fail_closed() {
     assert!(!unit.contains("cargo nextest"));
     assert!(!unit.contains("cargo audit"));
     // General policy runs once on Linux; only the platform-specific fixture
-    // is additionally selected in the Windows base cell.
+    // is additionally selected in the Windows anchor cell.
     assert_eq!(workflow.matches("--test repository_policy").count(), 2);
     assert_eq!(workflow.matches("-p whisper-dictate-app --doc").count(), 1);
 
@@ -1439,7 +1439,7 @@ fn extracted_release_smokes_retain_the_real_artifact_contracts() {
 }
 
 #[test]
-fn windows_release_fixture_runs_in_the_required_base_cell() {
+fn windows_release_fixture_runs_in_the_required_anchor_cell() {
     let workflow = read_repo(".github/workflows/test.yml");
     let rust_features = workflow
         .split("\n  rust-features:\n")
@@ -1452,7 +1452,7 @@ fn windows_release_fixture_runs_in_the_required_base_cell() {
         .and_then(|step| step.split("\n      - name:").next())
         .expect("Windows fixture step");
     assert!(fixture.contains(
-        "if: env.RUN_RUST == 'true' && runner.os == 'Windows' && matrix.profile.id == 'base'"
+        "if: env.RUN_RUST == 'true' && runner.os == 'Windows' && matrix.profile.id == env.ANCHOR_PROFILE"
     ));
     assert!(fixture.contains("cargo test --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --test repository_policy windows_extracted_release_scripts_parse_and_execute_cpu_fallback_fixture -- --exact"));
     assert_eq!(

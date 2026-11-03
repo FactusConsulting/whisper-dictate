@@ -14,8 +14,11 @@ fn native_windows_smoke_reserves_the_entire_nextest_pool() {
 }
 
 #[test]
-fn native_windows_smoke_runs_only_in_the_base_ci_feature_cell() {
-    let workflow = include_str!("../../../.github/workflows/test.yml");
+fn native_windows_smoke_runs_only_in_the_anchor_ci_feature_cell() {
+    let workflow = include_str!("../../../.github/workflows/test.yml").replace("\r\n", "\n");
+    assert!(workflow.contains(
+        "ANCHOR_PROFILE: ${{ github.event_name == 'pull_request' && 'base' || 'shipping' }}"
+    ));
     let test_steps = workflow
         .split("      - name: Rust tests\n")
         .nth(1)
@@ -23,12 +26,14 @@ fn native_windows_smoke_runs_only_in_the_base_ci_feature_cell() {
         .split("      - name: Windows release-script fixture\n")
         .next()
         .unwrap();
-    let (base_step, non_base_step) = test_steps
-        .split_once("      - name: Rust tests (Windows non-base)\n")
-        .expect("separate Windows non-base test step");
-    assert!(base_step.contains("runner.os != 'Windows' || matrix.profile.id == 'base'"));
-    assert!(base_step.contains("-E 'not(binary(=repository_policy))'"));
-    assert!(non_base_step.contains("runner.os == 'Windows'"));
-    assert!(non_base_step.contains("matrix.profile.id != 'base'"));
-    assert!(non_base_step.contains("not(test(=ui::app_tests::view::hidden_windows_event_loop_drains_runtime_and_tray_without_ui))"));
+    let (anchor_step, non_anchor_step) = test_steps
+        .split_once("      - name: Rust tests (Windows non-anchor)\n")
+        .expect("separate Windows non-anchor test step");
+    assert!(
+        anchor_step.contains("runner.os != 'Windows' || matrix.profile.id == env.ANCHOR_PROFILE")
+    );
+    assert!(anchor_step.contains("-E 'not(binary(=repository_policy))'"));
+    assert!(non_anchor_step.contains("runner.os == 'Windows'"));
+    assert!(non_anchor_step.contains("matrix.profile.id != env.ANCHOR_PROFILE"));
+    assert!(non_anchor_step.contains("not(test(=ui::app_tests::view::hidden_windows_event_loop_drains_runtime_and_tray_without_ui))"));
 }
