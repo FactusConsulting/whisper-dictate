@@ -98,7 +98,9 @@ fn vulkan_sdk_installer_is_checksum_verified_from_the_mirror_first() {
     let version = env_value(&workflow, "VULKAN_SDK_VERSION");
     let sha256 = env_value(&workflow, "VULKAN_SDK_SHA256");
     assert_eq!(sha256.len(), 64, "VULKAN_SDK_SHA256 must be a full SHA-256");
-    assert!(sha256.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+    assert!(sha256
+        .chars()
+        .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
     assert_eq!(
         env_value(&workflow, "VULKAN_SDK_MIRROR_URL"),
         format!(
