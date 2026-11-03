@@ -813,7 +813,7 @@ fn release_skips_redundant_ci_only_after_a_successful_matching_run() {
         release
             .matches("RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}")
             .count(),
-        4,
+        5,
         "each release step that consumes the selected tag must receive it through an environment variable"
     );
     assert!(
@@ -825,8 +825,8 @@ fn release_skips_redundant_ci_only_after_a_successful_matching_run() {
         "the reusable test workflow must run when preflight finds no successful CI"
     );
     assert!(
-        release.contains("needs: [preflight, tests, install-smoke]"),
-        "the release job must also wait for the staged Windows installer smoke"
+        release.contains("needs: [preflight, tests, linux-bundles, install-smoke]"),
+        "the release job must also wait for the staged Linux bundles and the Windows installer smoke"
     );
     assert!(
         release.contains("needs.tests.result == 'success'")
@@ -888,7 +888,7 @@ fn release_jobs(release: &str) -> Vec<(String, String)> {
 }
 
 #[test]
-fn release_builds_windows_installer_in_parallel_but_publishes_only_after_tests() {
+fn release_builds_platform_artifacts_in_parallel_but_publishes_only_after_tests() {
     let release = read_repo(".github/workflows/release.yml");
     let jobs = release_jobs(&release);
     let job = |name: &str| {
@@ -922,6 +922,42 @@ fn release_builds_windows_installer_in_parallel_but_publishes_only_after_tests()
         "install-smoke runs before tests pass, so it must stay unable to publish"
     );
 
+    let linux = job("linux-bundles");
+    assert!(
+        linux.starts_with("    needs: preflight\n") && !linux.contains("tests"),
+        "the Linux bundle build must depend on the preflight version gate only"
+    );
+    assert!(
+        linux.contains("    permissions:\n      contents: read\n")
+            && !linux.contains("secrets")
+            && !linux.contains("GH_TOKEN"),
+        "the Linux bundle build runs before tests pass, so it must stay unable to publish"
+    );
+    let linux_artifact = "name: linux-release-${{ github.event.inputs.tag || github.ref_name }}";
+    assert!(
+        linux.contains("cargo build --manifest-path src/rust/Cargo.toml --target-dir target --release -p whisper-dictate-app --bins --no-default-features --features shipping")
+            && linux.contains("bash -n scripts/linux/install-rust-ui.sh")
+            && linux.contains("uses: actions/upload-artifact@v7")
+            && linux.contains(linux_artifact),
+        "the Linux bundle job must sanity-check the scripts, build the shipping binary, and stage it as a tag-named artifact"
+    );
+    let publisher = job("release");
+    assert!(
+        !publisher.contains("cargo build") && !publisher.contains("rust-toolchain"),
+        "the release job must publish the staged Linux bundle instead of rebuilding it"
+    );
+    assert!(
+        publisher.contains("uses: actions/download-artifact@v8")
+            && publisher.contains(linux_artifact)
+            && publisher.contains("\"linux-assets/whisper-dictate-linux-${VERSION}.zip\"")
+            && publisher.contains("\"linux-assets/wd-linux-rust-ui-${VERSION}\""),
+        "the release job must validate and publish the staged Linux artifacts"
+    );
+    assert!(
+        publisher.contains("      needs.linux-bundles.result == 'success' &&\n"),
+        "the release job must require a successful Linux bundle build"
+    );
+
     let test_gate = "      (needs.tests.result == 'success' ||\n      needs.preflight.outputs.already_green == 'true')";
     let publish_markers = [
         "contents: write",
@@ -942,12 +978,17 @@ fn release_builds_windows_installer_in_parallel_but_publishes_only_after_tests()
             .lines()
             .find_map(|line| line.strip_prefix("    needs: "))
             .unwrap_or_else(|| panic!("publishing job {name} must declare needs"));
-        for gate in ["preflight", "tests", "install-smoke"] {
+        let required_gates: &[&str] = if name == "release" {
+            &["preflight", "tests", "linux-bundles", "install-smoke"]
+        } else {
+            &["preflight", "tests", "install-smoke"]
+        };
+        for gate in required_gates {
             assert!(
                 needs
                     .trim_matches(['[', ']'])
                     .split(',')
-                    .any(|need| need.trim() == gate),
+                    .any(|need| need.trim() == *gate),
                 "publishing job {name} must need {gate}; got `{needs}`"
             );
         }
