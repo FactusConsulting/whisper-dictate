@@ -90,6 +90,27 @@ underneath it. The Inno installer's Start-menu / desktop shortcuts point at
 
 The `.exe` installer is still the recommended Windows path.
 
+### Updating From The App
+
+When the update check finds a newer version, the sidebar shows a
+"vX.Y.Z available" badge. On Windows, clicking it asks for confirmation
+(whisper-dictate closes during the update) and then:
+
+- **Chocolatey install:** opens an administrator PowerShell window (UAC
+  prompt) that runs `choco upgrade whisper-dictate --source=whisper-dictate
+  --version=X.Y.Z -y` (plus `--prerelease` for a release candidate), then
+  starts whisper-dictate again. A failure shows the exit code and waits for
+  Enter.
+- **Installer install:** downloads `whisper-dictate-windows-setup-X.Y.Z.exe`
+  and `sha256sums.txt` from the release, refuses to continue unless the
+  SHA-256 matches, and opens the setup wizard.
+- **winget install:** opens a PowerShell window that runs
+  `winget upgrade --id FactusConsulting.WhisperDictate --exact`, then starts
+  whisper-dictate again.
+
+Portable builds open the release page instead. Nothing is downloaded until you
+confirm, and the update is blocked while Local-only mode is on.
+
 ### Terminal Start
 
 ```powershell

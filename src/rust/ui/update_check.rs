@@ -4,6 +4,9 @@
 //! project's public version feed on GitHub Pages (github.io) and sends NO data,
 //! telemetry, or identifiers anywhere. It reads back a plain JSON list of
 //! published versions and compares the highest one against the running version.
+//! Nothing is downloaded or installed here: the update itself only runs after
+//! the user clicks the badge AND confirms (`update_install_flow`), never in
+//! local-only mode.
 //!
 //! The pure comparison ([`latest_newer_version`]) is unit-tested; the thin
 //! network fetch ([`fetch_published_versions`]) is not (it touches the network).
