@@ -807,6 +807,51 @@ fn release_skips_redundant_ci_only_after_a_successful_matching_run() {
 }
 
 #[test]
+fn release_preflight_waits_for_an_unfinished_push_ci_run() {
+    let release = read_repo(".github/workflows/release.yml");
+    let preflight = release
+        .split("\n  preflight:\n")
+        .nth(1)
+        .and_then(|tail| tail.split("\n  tests:\n").next())
+        .expect("release workflow must define the preflight job");
+    let existing_ci = preflight
+        .split("id: existing_ci\n")
+        .nth(1)
+        .expect("preflight must define the existing_ci step");
+    assert!(
+        !existing_ci.contains("status=completed"),
+        "preflight must see queued/in-progress push runs, not only completed ones"
+    );
+    assert!(
+        existing_ci.contains("select(.status != \"completed\" and .event == \"push\")"),
+        "preflight must count unfinished push test.yml runs for the tagged commit"
+    );
+    assert!(
+        existing_ci.contains("while :; do") && existing_ci.contains("sleep \"$CI_POLL_SECONDS\""),
+        "preflight must poll an unfinished push run instead of starting a parallel test matrix"
+    );
+    assert!(
+        existing_ci.contains("if [ \"$pending_runs\" -eq 0 ]; then"),
+        "preflight must stop waiting as soon as no push run is unfinished"
+    );
+    let minutes = |haystack: &str, key: &str| -> u32 {
+        haystack
+            .split(key)
+            .nth(1)
+            .and_then(|tail| tail.lines().next())
+            .map(|value| value.trim().trim_matches('\''))
+            .and_then(|value| value.parse().ok())
+            .unwrap_or_else(|| panic!("preflight must set a numeric {key}"))
+    };
+    let wait_minutes = minutes(existing_ci, "CI_WAIT_MINUTES:");
+    let job_timeout = minutes(preflight, "\n    timeout-minutes:");
+    assert!(
+        (60..job_timeout).contains(&wait_minutes),
+        "the push-CI wait ({wait_minutes} min) must cover a full test.yml run and end before the preflight job timeout ({job_timeout} min) so a timed-out wait falls back to the release's own tests"
+    );
+}
+
+#[test]
 fn shipping_feature_profiles_are_the_canonical_package_surface() {
     let output = Command::new("cargo")
         .args([

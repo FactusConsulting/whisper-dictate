@@ -18,9 +18,12 @@ on:
 
 jobs:
   # Validate the release version, then reuse CI only when this tag's commit
-  # has already passed the same workflow.
+  # has already passed the same workflow. A push run of test.yml that is still
+  # queued or running for the tagged commit is awaited (bounded by
+  # CI_WAIT_MINUTES) instead of starting a second full test matrix next to it.
   preflight:
     runs-on: arc-runner-public
+    timeout-minutes: 150
     permissions:
       actions: read
       contents: read
@@ -80,6 +83,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+          # Must stay below the job timeout-minutes so a timed-out wait still
+          # falls back to the release's own tests instead of failing preflight.
+          CI_WAIT_MINUTES: '120'
+          CI_POLL_SECONDS: '60'
         shell: bash
         run: |
           set -euo pipefail
@@ -96,15 +103,34 @@ jobs:
             echo "::error::${tag} resolves to ${object_type}, not a commit"
             exit 1
           fi
-          successful_runs=$(gh api \
-            "repos/${GITHUB_REPOSITORY}/actions/workflows/test.yml/runs?head_sha=${commit_sha}&status=completed&per_page=100" \
-            --jq '[.workflow_runs[] | select(.conclusion == "success" and .event == "push")] | length')
+          deadline=$(( $(date +%s) + CI_WAIT_MINUTES * 60 ))
           already_green=false
-          if [ "$successful_runs" -gt 0 ]; then
-            already_green=true
-          fi
+          while :; do
+            if runs=$(gh api \
+              "repos/${GITHUB_REPOSITORY}/actions/workflows/test.yml/runs?head_sha=${commit_sha}&event=push&per_page=100"); then
+              successful_runs=$(jq '[.workflow_runs[] | select(.conclusion == "success" and .event == "push")] | length' <<<"$runs")
+              pending_runs=$(jq '[.workflow_runs[] | select(.status != "completed" and .event == "push")] | length' <<<"$runs")
+              echo "${tag} -> ${commit_sha}; successful push test.yml runs: ${successful_runs}; unfinished: ${pending_runs}"
+              if [ "$successful_runs" -gt 0 ]; then
+                already_green=true
+                break
+              fi
+              if [ "$pending_runs" -eq 0 ]; then
+                echo "No unfinished push test.yml run for ${commit_sha}; the release runs its own tests."
+                break
+              fi
+            else
+              echo "::warning::Listing test.yml runs for ${commit_sha} failed; retrying until the wait deadline."
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::warning::Push test.yml run for ${commit_sha} did not finish within ${CI_WAIT_MINUTES} minutes; the release runs its own tests."
+              break
+            fi
+            echo "Waiting ${CI_POLL_SECONDS}s for the push test.yml run on ${commit_sha} to finish..."
+            sleep "$CI_POLL_SECONDS"
+          done
           echo "already_green=${already_green}" >> "$GITHUB_OUTPUT"
-          echo "${tag} -> ${commit_sha}; successful test.yml runs: ${successful_runs}"
+          echo "already_green=${already_green}"
 
   tests:
     needs: preflight
