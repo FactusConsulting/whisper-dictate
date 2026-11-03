@@ -1129,6 +1129,23 @@ fn eframe_and_material_icons_resolve_one_egui_version() {
     );
 }
 
+/// The UI's copy buttons (runtime log, transcript, update command) call
+/// `Context::copy_text`; without eframe's `clipboard` feature the text never
+/// reaches the OS clipboard even though the UI reports it as copied.
+#[test]
+fn eframe_keeps_os_clipboard_support() {
+    let manifest = read_repo("src/rust/Cargo.toml");
+    let start = manifest
+        .find("\neframe = {")
+        .expect("eframe dependency in [dependencies]");
+    let block = &manifest[start..];
+    let block = &block[..block.find('}').expect("end of eframe dependency")];
+    assert!(
+        block.contains("\"clipboard\""),
+        "eframe must enable its `clipboard` feature: {block}"
+    );
+}
+
 #[test]
 fn windows_installer_rebuilds_tags_that_predate_shipping_profiles() {
     let workflow = format!(

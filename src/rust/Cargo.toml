@@ -138,8 +138,11 @@ ctrlc = "3.4"
 # eframe and egui_material_icons must move together because both expose egui
 # types at the initialize call below. eframe 0.37 and icons 0.9 both use egui
 # 0.37, avoiding incompatible egui::Context values in the GUI startup path.
+# `clipboard` is required for `Context::copy_text` to reach the OS clipboard;
+# without it egui keeps copied text inside the app.
 eframe = { version = "0.37", default-features = false, features = [
   "accesskit",
+  "clipboard",
   "default_fonts",
   "wayland",
   "x11",
