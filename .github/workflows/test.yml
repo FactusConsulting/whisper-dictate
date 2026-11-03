@@ -340,7 +340,9 @@ jobs:
         # are additive, so code gated on one feature can accidentally
         # reference an item only present under another; a combined-only
         # test would compile while the standalone case breaks for users
-        # who enable that one feature alone.
+        # who enable that one feature alone. Pull requests run every
+        # cell; push to main and the release workflow_call run only the
+        # `shipping` and `clippy-glow` cells (see `exclude` below).
         profile:
           - id: base
             feature_arg: ""
@@ -377,6 +379,11 @@ jobs:
           - id: clippy-glow
             feature_arg: "--features ui-egui-glow"
             role: clippy
+        # Push to main and the release workflow_call (whose `github.event_name`
+        # is the caller's event) test only the exact shipped feature set: the
+        # standalone cells already gated the PR that produced the commit.
+        # Excluding them here means no runner is allocated for them at all.
+        exclude: ${{ fromJSON(github.event_name == 'pull_request' && '[]' || '[{"profile":{"id":"base"}},{"profile":{"id":"hotkeys"}},{"profile":{"id":"audio"}},{"profile":{"id":"hotkeys-injection"}},{"profile":{"id":"local-injection"}}]') }}
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'arc-runner-public' || matrix.os }}
     env:
       # `rust` output is the per-language gate (issue #590):
@@ -384,6 +391,11 @@ jobs:
       # shared config or scripts skips the whole rust matrix (~5-15 min
       # of wall-clock on Windows). Non-PR events always run.
       RUN_RUST: ${{ needs.changes.result == 'success' && (needs.changes.outputs.rust == 'true' || github.event_name != 'pull_request') }}
+      # The anchor cell owns the once-per-run checks (fmt, the Windows native
+      # GUI smoke, the Windows release-script fixture): `base` on pull
+      # requests, `shipping` wherever `base` is excluded. `shipping` is a
+      # superset of the default features, so it compiles the same smoke.
+      ANCHOR_PROFILE: ${{ github.event_name == 'pull_request' && 'base' || 'shipping' }}
     steps:
       - name: Fail matrix leg if change detection broke
         if: needs.changes.result != 'success'
@@ -433,8 +445,8 @@ jobs:
           key: ${{ matrix.profile.id }}
       - name: Rust format
         # fmt is OS- and feature-independent, so run it exactly once (in
-        # the ubuntu `base` cell) instead of on every matrix leg.
-        if: env.RUN_RUST == 'true' && matrix.profile.id == 'base' && runner.os == 'Linux'
+        # the ubuntu anchor cell) instead of on every matrix leg.
+        if: env.RUN_RUST == 'true' && matrix.profile.id == env.ANCHOR_PROFILE && runner.os == 'Linux'
         run: cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
       - name: Rust Clippy
         # Everyday CI is glow-only (our shipping renderer) so it stays fast and
@@ -452,20 +464,22 @@ jobs:
         # (rdev/enigo, cpal/rubato); base covers the default
         # feature intersection.
         # The native hidden-window smoke is feature-independent and initializes
-        # WGPU/WARP on Windows. Run it once in the base cell, not six times in
-        # parallel feature cells; the other cells still run their full feature
+        # the renderer on Windows. Run it once in the anchor cell, not in every
+        # parallel feature cell; the other cells still run their full feature
         # tests. See #892 for the intermittent renderer-startup stall.
-        if: env.RUN_RUST == 'true' && matrix.profile.role == 'test' && (runner.os != 'Windows' || matrix.profile.id == 'base')
+        if: env.RUN_RUST == 'true' && matrix.profile.role == 'test' && (runner.os != 'Windows' || matrix.profile.id == env.ANCHOR_PROFILE)
         run: cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci -E 'not(binary(=repository_policy))' ${{ matrix.profile.feature_arg }}
-      - name: Rust tests (Windows non-base)
-        if: env.RUN_RUST == 'true' && runner.os == 'Windows' && matrix.profile.role == 'test' && matrix.profile.id != 'base'
+      - name: Rust tests (Windows non-anchor)
+        if: env.RUN_RUST == 'true' && runner.os == 'Windows' && matrix.profile.role == 'test' && matrix.profile.id != env.ANCHOR_PROFILE
         run: cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci -E 'not(binary(=repository_policy)) and not(test(=ui::app_tests::view::hidden_windows_event_loop_drains_runtime_and_tray_without_ui))' ${{ matrix.profile.feature_arg }}
       - name: Windows release-script fixture
-        if: env.RUN_RUST == 'true' && runner.os == 'Windows' && matrix.profile.id == 'base'
+        if: env.RUN_RUST == 'true' && runner.os == 'Windows' && matrix.profile.id == env.ANCHOR_PROFILE
         run: cargo test --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --test repository_policy windows_extracted_release_scripts_parse_and_execute_cpu_fallback_fixture -- --exact
       - name: Audio capture report gate
-        # This audio cell feeds the required rust aggregators. Do not hide
-        # build failures or unexpected self-test errors as missing hardware.
+        # This audio cell feeds the required rust aggregators on pull requests.
+        # Do not hide build failures or unexpected self-test errors as missing
+        # hardware. Push and release runs get the same report gate from the
+        # `integration-ubuntu-2604` audio-capture self-test.
         if: env.RUN_RUST == 'true' && runner.os == 'Linux' && matrix.profile.id == 'audio'
         shell: bash
         run: |
