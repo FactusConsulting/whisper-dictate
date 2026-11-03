@@ -1,0 +1,16 @@
+name: tmp-vulkan-sdk-validate
+
+# Temporary branch-only validation of the Vulkan SDK mirror install; removed
+# before review.
+on:
+  push:
+    branches: [ci/vulkan-sdk-timeout]
+
+jobs:
+  build-installer:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/windows-installer-build.yml
+    with:
+      tag: v3.5.2
+      force_build: true

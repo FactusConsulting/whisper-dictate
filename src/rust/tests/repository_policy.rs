@@ -1164,10 +1164,8 @@ fn windows_vulkan_sdk_pin_and_native_caches_share_one_version() {
     let workflow = read_repo(".github/workflows/windows-installer-build.yml");
     let builder = read_repo("scripts/windows/build-release-binaries.ps1");
     assert!(workflow.contains("VULKAN_SDK_VERSION: 1.4.357.0"));
-    assert!(workflow.contains("vulkan_version: ${{ env.VULKAN_SDK_VERSION }}"));
+    assert!(workflow.contains("-Version $env:VULKAN_SDK_VERSION"));
     assert!(!workflow.contains("1.3.290.0"));
-    assert!(workflow.contains("install_runtime: true"));
-    assert!(workflow.contains("stripdown: true"));
     assert!(workflow.contains("shared-key: \"rust-release-windows-vulkan-ninja-native-off-v1-sdk-${{ env.VULKAN_SDK_VERSION }}\""));
     assert!(workflow.contains(
         "rust-release-windows-vulkan-shorttarget-v2-native-off-sdk-${{ env.VULKAN_SDK_VERSION }}-"
