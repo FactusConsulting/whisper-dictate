@@ -259,7 +259,7 @@ fn the_unwind_guard_does_not_drain_twice_on_the_normal_path() {
     ] {
         let drains = AtomicUsize::new(0);
         let mut stderr = Vec::<u8>::new();
-        error_exit_shell_with_teardown_using(
+        let _ = error_exit_shell_with_teardown_using(
             "error",
             &mut stderr,
             || outcome,

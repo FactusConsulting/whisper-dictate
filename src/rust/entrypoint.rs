@@ -372,7 +372,7 @@ mod tests {
         // Both binaries currently pass "error" but the shell must not hardcode
         // it — a regression that ignored the prefix would leak here.
         let mut stderr = Vec::<u8>::new();
-        error_exit_shell("startup", &mut stderr, || Err(anyhow::anyhow!("boom")));
+        let _ = error_exit_shell("startup", &mut stderr, || Err(anyhow::anyhow!("boom")));
         assert_eq!(String::from_utf8(stderr).unwrap(), "startup: boom\n");
     }
 
@@ -385,7 +385,7 @@ mod tests {
         // `{err:?}` or trims.
         let err = anyhow::anyhow!("outer").context("inner reason");
         let mut stderr = Vec::<u8>::new();
-        error_exit_shell("error", &mut stderr, || Err(err));
+        let _ = error_exit_shell("error", &mut stderr, || Err(err));
         let out = String::from_utf8(stderr).unwrap();
         assert!(out.starts_with("error: inner reason"), "got: {out:?}");
     }
