@@ -23,33 +23,15 @@ fn make_runtime_archive(root: &Path, library_filename: &str) -> PathBuf {
     } else {
         "runtime.tar.gz"
     });
-    let status = if cfg!(windows) {
-        Command::new("powershell.exe")
-            .args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                "Compress-Archive -LiteralPath $env:VOICEPI_NEMOTRON_FIXTURE -DestinationPath $env:VOICEPI_NEMOTRON_ARCHIVE -Force",
-            ])
-            .env(
-                "VOICEPI_NEMOTRON_FIXTURE",
-                source.join(library_filename),
-            )
-            .env("VOICEPI_NEMOTRON_ARCHIVE", &archive)
-            .status()
-            .expect("start PowerShell archive fixture")
-    } else {
-        Command::new("tar")
-            .args(["-czf"])
-            .arg(&archive)
-            .args(["-C"])
-            .arg(&source)
-            .arg(library_filename)
-            .status()
-            .expect("start tar archive fixture")
-    };
+    // bsdtar's -a picks zip from the .zip suffix on Windows.
+    let status = archive_tar_command()
+        .args([if cfg!(windows) { "-a" } else { "-z" }, "-cf"])
+        .arg(&archive)
+        .args(["-C"])
+        .arg(&source)
+        .arg(library_filename)
+        .status()
+        .expect("start tar archive fixture");
     assert!(status.success(), "runtime fixture archive failed: {status}");
     archive
 }
@@ -491,4 +473,25 @@ fn publication_lock_wait_observes_runtime_cancellation() {
     assert!(error.to_string().contains("cancelled"));
     drop(holder);
     worker.join().expect("lock waiter exits");
+}
+
+#[test]
+fn a_corrupt_archive_fails_extraction() {
+    let directory = tempdir().expect("temporary Nemotron runtime directory");
+    let archive = directory.path().join(if cfg!(windows) {
+        "runtime.zip"
+    } else {
+        "runtime.tar.gz"
+    });
+    fs::write(&archive, b"not an archive").expect("write corrupt archive");
+    let destination = directory.path().join("runtime");
+
+    let error = extract_runtime(&archive, &destination, runtime_library_filename())
+        .expect_err("a corrupt archive must not extract");
+
+    assert!(
+        error.to_string().contains("failed to extract"),
+        "the extractor's exit status must report the failure: {error}"
+    );
+    assert!(!destination.exists());
 }
