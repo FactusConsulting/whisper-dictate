@@ -1,3 +1,4 @@
+use super::status_surface::focus_taking_actions_available;
 use super::*;
 use egui_material_icons::icons;
 use std::time::Duration;
@@ -224,6 +225,11 @@ impl WhisperDictateApp {
         let health_good_badge = ui_text(lang, UiTextKey::HealthGood).to_owned();
         let health_fair_badge = ui_text(lang, UiTextKey::HealthFair).to_owned();
         let health_poor_badge = ui_text(lang, UiTextKey::HealthPoor).to_owned();
+        let copy_hover = ui_text(lang, UiTextKey::Copy);
+        // The same gate as the last-transcript copy button: no clipboard write
+        // while a dictation may be pasting through it.
+        let copy_enabled =
+            focus_taking_actions_available(self.pipeline_stage, self.audio_capture_opening);
         for card in cards {
             if card.title.trim().is_empty() {
                 continue;
@@ -239,7 +245,12 @@ impl WhisperDictateApp {
                 "HealthPoor" => health_poor_badge.as_str(),
                 _ => card.badge.as_str(),
             };
-            runtime_log_card(ui, card, badge, palette);
+            if let Some(text) =
+                runtime_log_card(ui, card, badge, palette, Some((copy_enabled, copy_hover)))
+            {
+                crate::injection::cancel_ui_clipboard_restore();
+                ui.ctx().copy_text(text.to_owned());
+            }
             ui.add_space(8.0);
         }
     }

@@ -865,3 +865,44 @@ fn health_line_kept_in_diagnostic_text_view() {
         "health line should survive the diagnostic text filter; got: {diagnostic:?}"
     );
 }
+
+#[test]
+fn only_transcript_cards_offer_their_text_to_copy() {
+    let card = |kind, title: &str, badge: &str| RuntimeLogCard {
+        kind,
+        title: title.to_owned(),
+        detail: String::new(),
+        badge: badge.to_owned(),
+    };
+    assert_eq!(
+        card(RuntimeLogCardKind::FinalText, " hello world ", "Final").transcript(),
+        Some("hello world")
+    );
+    assert_eq!(
+        card(RuntimeLogCardKind::Diagnostic, "spoken text", "Utterance").transcript(),
+        Some("spoken text")
+    );
+    assert_eq!(
+        card(RuntimeLogCardKind::FinalText, "  ", "Final").transcript(),
+        None
+    );
+    assert_eq!(
+        card(RuntimeLogCardKind::Status, "Worker started", "Worker").transcript(),
+        None
+    );
+    assert_eq!(
+        card(RuntimeLogCardKind::Diagnostic, "capture", "Capture lost").transcript(),
+        None
+    );
+    assert_eq!(
+        card(RuntimeLogCardKind::HealthFair, "noisy", "HealthFair").transcript(),
+        None
+    );
+}
+
+#[test]
+fn minimal_view_final_card_offers_its_text_to_copy() {
+    let log = "[inject] -> \"Hej, Sara.\"  (target: Word)";
+    let cards = runtime_log_cards(log, LogViewMode::Minimal);
+    assert_eq!(cards[0].transcript(), Some("Hej, Sara."));
+}
