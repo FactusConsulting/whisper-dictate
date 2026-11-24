@@ -74,7 +74,7 @@ pub use wav::{decode_wav_16k_mono, WHISPER_SAMPLE_RATE_HZ};
 // the sink's real-backends module is gated on -- otherwise a
 // `whisper-rs-local`-only build (e.g. CI's release smoke leg) would
 // flag the unused import.
-#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+#[cfg(native_session)]
 pub(crate) use dispatch::resolve_model_path;
 #[cfg(feature = "whisper-rs-local")]
 pub use dispatch::{handle_transcribe_server, handle_transcribe_wav, MODEL_PATH_ENV};

@@ -120,9 +120,9 @@ fn shared_restore_state() -> Option<Arc<Mutex<RestoreState>>> {
 /// coordination. Safe to call again on restart: the replacement is
 /// appended and older idle entries are pruned.
 ///
-/// The only caller lives behind the whisper-rs-local session build, so
-/// builds without that feature legitimately never call it.
-#[cfg_attr(not(feature = "whisper-rs-local"), allow(dead_code))]
+/// The only caller is the native session (`cfg(native_session)`), so
+/// other builds legitimately never call it.
+#[cfg_attr(not(native_session), allow(dead_code))]
 pub(crate) fn register_runtime_backend(backend: &Arc<EnigoInjectBackend>) {
     let slot = RUNTIME_BACKENDS.get_or_init(|| Mutex::new(Vec::new()));
     let mut backends = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());

@@ -59,10 +59,7 @@ pub(crate) enum WorkerEventOutput {
     Environment,
     /// Set by `DictateSession::with_worker_events_enabled`, which only the
     /// real-backend session constructor calls in production.
-    #[cfg_attr(
-        not(all(feature = "whisper-rs-local", feature = "rust-injection")),
-        allow(dead_code)
-    )]
+    #[cfg_attr(not(native_session), allow(dead_code))]
     Enabled,
 }
 

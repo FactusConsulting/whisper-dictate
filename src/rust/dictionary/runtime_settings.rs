@@ -36,7 +36,7 @@ impl RuntimeDictionarySettings {
 
     /// Build the dictionary view owned by an in-process runtime snapshot.
     /// No process environment or config file is consulted here.
-    #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+    #[cfg(native_session)]
     pub(crate) fn from_app_settings(settings: &config::AppSettings) -> Self {
         Self::new(
             settings.dictionary_enabled,

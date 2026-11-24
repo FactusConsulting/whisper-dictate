@@ -24,10 +24,7 @@
 //! `rust_session_sink_coverage_tests.rs` and
 //! `rust_session_sink_e2e_tests.rs` modules; the stub backends they drive
 //! live in [`super::test_support`].
-#![cfg_attr(
-    not(all(feature = "whisper-rs-local", feature = "rust-injection")),
-    allow(dead_code)
-)]
+#![cfg_attr(not(native_session), allow(dead_code))]
 
 use std::io::Write;
 use std::sync::mpsc::Sender;
@@ -352,7 +349,7 @@ pub(crate) fn try_build_production_sink(
     ),
     String,
 > {
-    #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+    #[cfg(native_session)]
     {
         let coord_slot: Arc<CoordinatorLink> = Arc::new(CoordinatorLink::new());
         let runtime_active = Arc::new(std::sync::atomic::AtomicBool::new(true));
@@ -383,15 +380,16 @@ pub(crate) fn try_build_production_sink(
         let sink = terminal_panic_boundary(Box::new(owning_sink), tx.clone(), repaint_notifier);
         Ok((sink, coord_slot, runtime_active, capture_stop))
     }
-    #[cfg(not(all(feature = "whisper-rs-local", feature = "rust-injection")))]
+    #[cfg(not(native_session))]
     {
         // Consume unused args so the signature stays constant across
         // feature configs.
         let _ = (tx, repaint_notifier, live_env_overrides, runtime);
         Err(
-            "rust-session real backends require the `whisper-rs-local` + \
-             `rust-injection` cargo features (rebuild with `cargo build \
-             --no-default-features --features shipping`)"
+            "rust-session real backends require the `whisper-rs-local`, \
+             `rust-injection`, `rust-hotkeys` and `audio-capture` cargo \
+             features (rebuild with `cargo build --no-default-features \
+             --features shipping`)"
                 .to_owned(),
         )
     }
