@@ -266,7 +266,7 @@ tokens. Treat Windows trace logs as sensitive and share them only privately.
 | Cloud OpenAI-compatible STT | Yes | Yes | Yes |
 | Text injection | Native type/paste | Helper chain | Native X11 helpers |
 | Restore a previous target | Yes | No portable compositor API | Yes |
-| Tray integration | Yes | Desktop control window | Desktop control window |
+| Tray integration | Yes | StatusNotifierItem (Waybar, KDE, GNOME with the AppIndicator extension) | StatusNotifierItem |
 
 ## Repository ownership
 

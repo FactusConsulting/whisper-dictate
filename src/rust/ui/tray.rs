@@ -11,14 +11,14 @@
 //!   ([`tray_icon_rgba`]), and the tooltip-key mapping — is **cfg-free** so its unit tests run on every
 //!   platform (incl. the Linux dev container/CI). [`tray_state_for`] is called
 //!   from `app.rs` (cfg-free) so it is never dead. The icon/tooltip helpers are
-//!   Windows-only consumers; they carry `#[cfg_attr(not(windows), allow(dead_code))]`
+//!   consumed by the Windows and Linux trays; they carry
+//!   `#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]`
 //!   so the pure logic stays compiled+tested on every platform.
-//! - The actual OS tray lives behind `#[cfg(windows)]` (see [`TrayManager`]).
-//!   Windows is the primary platform and the user's request is Windows-specific;
-//!   gating to Windows also keeps tray-icon's gtk/libxdo system deps out of the
-//!   Linux build entirely (the crate is a `cfg(windows)` target dependency).
-//!   Every other platform gets a zero-cost no-op stub, so the call sites in
-//!   `app.rs` stay platform-agnostic and the dictation flow is never affected.
+//! - The OS tray is per platform (see [`TrayManager`]): `tray-icon` on Windows,
+//!   a StatusNotifierItem through `ksni` on Linux (`tray_linux.rs`), which keeps
+//!   tray-icon's gtk/libxdo system deps out of the Linux build. Every other
+//!   platform gets a zero-cost no-op stub, so the call sites in `app.rs` stay
+//!   platform-agnostic and the dictation flow is never affected.
 
 use super::{ui_text, UiTextKey};
 
@@ -38,11 +38,11 @@ pub(in crate::ui) enum TrayState {
     Processing,
 }
 
-// `rgb` / `tooltip_key` feed the Windows tray icon + tooltip and the cfg-free
-// unit tests. On a non-Windows non-test build (e.g. the Linux dev container/CI)
-// the tray is a no-op stub, so they read as dead there — allow it rather than
-// cfg-gate the pure logic, which must stay compiled+tested on every platform.
-#[cfg_attr(not(windows), allow(dead_code))]
+// `rgb` / `tooltip_key` feed the Windows and Linux tray icon + tooltip and the
+// cfg-free unit tests. Where the tray is a no-op stub they read as dead — allow
+// it rather than cfg-gate the pure logic, which must stay compiled+tested on
+// every platform.
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 impl TrayState {
     /// The opaque RGB fill for this state's mic dot. Kept here (not in the
     /// theme palette) so it is cfg-free and unit-testable without an egui
@@ -136,7 +136,7 @@ pub(in crate::ui) fn tray_state_for_capture(
 }
 
 /// The localized tooltip string for a tray state (e.g. "whisper-dictate — recording").
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 pub(in crate::ui) fn tray_tooltip(state: TrayState, raw_language: &str) -> &'static str {
     ui_text(raw_language, state.tooltip_key())
 }
@@ -149,7 +149,7 @@ pub(in crate::ui) fn tray_tooltip(state: TrayState, raw_language: &str) -> &'sta
 /// `tray_icon::Icon` from this buffer via `Icon::from_rgba`.
 ///
 /// The returned buffer is exactly `size * size * 4` bytes in RGBA order.
-#[cfg_attr(not(windows), allow(dead_code))]
+#[cfg_attr(not(any(windows, target_os = "linux")), allow(dead_code))]
 pub(in crate::ui) fn tray_icon_rgba(state: TrayState, size: u32) -> Vec<u8> {
     let [r, g, b] = state.rgb();
     let mut rgba = vec![0u8; (size * size * 4) as usize];
@@ -196,8 +196,14 @@ pub(in crate::ui) struct TrayInteraction {
 
 #[cfg(windows)]
 pub(in crate::ui) use self::imp::TrayManager;
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub(in crate::ui) use self::linux::TrayManager;
+#[cfg(not(any(windows, target_os = "linux")))]
 pub(in crate::ui) use self::stub::TrayManager;
+
+#[cfg(target_os = "linux")]
+#[path = "tray_linux.rs"]
+mod linux;
 
 /// Tray icon edge length in pixels. 32 px is a safe, crisp source size that
 /// Windows downscales for the notification area.
@@ -307,11 +313,11 @@ mod imp {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 mod stub {
     use super::{TrayInteraction, TrayState};
 
-    /// No-op tray for non-Windows targets: keeps the call sites in `app.rs`
+    /// No-op tray for platforms without one: keeps the call sites in `app.rs`
     /// identical without dragging gtk/libxdo into the Linux build. Every method
     /// is a cheap no-op, so the dictation flow is wholly unaffected.
     pub(in crate::ui) struct TrayManager;
