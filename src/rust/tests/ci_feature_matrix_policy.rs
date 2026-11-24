@@ -115,15 +115,19 @@ fn the_features_cell_checks_each_partial_feature_set() {
         "rust-hotkeys,rust-injection",
         "whisper-rs-local,audio-capture,rust-injection",
     ] {
-        assert!(sets.contains(required), "feature set {required} is not checked");
+        assert!(
+            sets.contains(required),
+            "feature set {required} is not checked"
+        );
     }
     let partial_tests = job
         .split("      - name: Rust tests that need a partial feature set\n")
         .nth(1)
         .expect("partial-feature-set test step");
     assert!(partial_tests.contains("--features rust-hotkeys,rust-injection"));
-    assert!(partial_tests
-        .contains("test(=runtime::rust_session_sink_tests::production_sink_refuses_without_real_backends)"));
+    assert!(partial_tests.contains(
+        "test(=runtime::rust_session_sink_tests::production_sink_refuses_without_real_backends)"
+    ));
 }
 
 #[test]
