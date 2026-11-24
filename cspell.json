@@ -122,6 +122,7 @@
     "XDG",
     "XFAIL",
     "ydotool",
-    "ydotoold"
+    "ydotoold",
+    "Waybar"
   ]
 }
