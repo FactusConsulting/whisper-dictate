@@ -80,7 +80,7 @@ pub use backends::{NemotronLocalBackendConfig, NemotronLocalTranscribeBackend};
 #[cfg(feature = "whisper-rs-local")]
 pub use backends::{WhisperLocalPreviewBackend, WhisperLocalTranscribeBackend};
 pub use env_gates::is_truthy;
-#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+#[cfg(native_session)]
 pub(crate) use feedback::SessionCueSink;
 pub use feedback::{play_cue, CueKind, CueSink, NoOpCueSink, SystemCueSink};
 pub use profile::{AppliedProfile, ProfileMatcher, ReloadingProfileMatcher, StaticProfileMatcher};
@@ -98,7 +98,7 @@ pub use session::{
     PreviewEngineConfig, PreviewError, PreviewSink, SessionConfig, SessionError, SessionState,
     TranscribeBackend, TranscribeError, TranscribeResult, UtteranceOutcome, SR,
 };
-#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+#[cfg(native_session)]
 pub(crate) use session::{history_sink_from_app_settings, metrics_sink_from_app_settings};
 pub use skip::{should_skip, SkipDecision, MIN_RECORD_FLOOR_S};
 

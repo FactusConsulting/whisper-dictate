@@ -103,6 +103,10 @@ fn the_features_cell_checks_each_partial_feature_set() {
     assert!(checks.contains("matrix.profile.role == 'features'"));
     assert!(checks.contains("cargo check "));
     assert!(checks.contains("--all-targets"));
+    assert!(
+        checks.contains("RUSTFLAGS: -D warnings"),
+        "a partial feature set must compile without warnings"
+    );
     let sets = checks
         .lines()
         .find_map(|line| line.trim().strip_prefix("for features in "))

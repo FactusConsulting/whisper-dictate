@@ -165,7 +165,7 @@ impl std::error::Error for CaptureReadyError {}
 /// Distinguish the startup timeout whose worker may still be blocked inside
 /// the operating-system audio driver. Recovery callers use this to avoid
 /// spawning an unbounded sequence of detached workers.
-#[cfg(any(all(feature = "whisper-rs-local", feature = "rust-injection"), test))]
+#[cfg(any(native_session, test))]
 pub(crate) fn is_capture_start_timeout(error: &anyhow::Error) -> bool {
     matches!(
         error.downcast_ref::<CaptureReadyError>(),

@@ -65,11 +65,7 @@ impl ProfileOverrideSlots {
     }
 
     /// Bind speech-gate and rate-limit settings to this in-process session.
-    #[cfg(any(
-        test,
-        feature = "nemotron-local",
-        all(feature = "whisper-rs-local", feature = "rust-injection")
-    ))]
+    #[cfg(any(test, feature = "nemotron-local", native_session))]
     pub(crate) fn set_guards(&self, guards: TranscriptionGuards) {
         *self.guards.lock().unwrap_or_else(|p| p.into_inner()) = Some(guards);
     }

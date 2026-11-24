@@ -57,11 +57,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// Share only the effective-device label with the capture pump. Recovery
     /// can validate while transcription owns the outer session mutex, so this
     /// small lock must remain independent from the utterance state machine.
-    #[cfg(all(
-        feature = "audio-capture",
-        feature = "whisper-rs-local",
-        feature = "rust-injection"
-    ))]
+    #[cfg(native_session)]
     pub(crate) fn effective_audio_device_handle(&self) -> Arc<RwLock<String>> {
         Arc::clone(&self.effective_audio_device)
     }

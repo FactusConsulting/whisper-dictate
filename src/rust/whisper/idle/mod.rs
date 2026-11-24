@@ -66,7 +66,7 @@ mod watcher;
 #[cfg(test)]
 mod tests;
 
-#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+#[cfg(native_session)]
 pub(crate) use env::parse_idle_timeout_str;
 pub use env::{parse_idle_timeout_from_env, IDLE_UNLOAD_ENV};
 
@@ -258,6 +258,7 @@ impl IdleUnloadingModel<LocalWhisper> {
     }
 
     /// Build a lazy model whose accelerator policy is session-owned.
+    #[cfg(native_session)]
     pub(crate) fn for_local_whisper_with_policy(
         model_path: std::path::PathBuf,
         idle_timeout: Option<Duration>,

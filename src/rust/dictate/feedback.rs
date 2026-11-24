@@ -94,7 +94,7 @@ impl CueSink for SystemCueSink {
 
 /// Production cue sink for the native runtime. The live enable gate is owned
 /// by the session rather than read from the process environment.
-#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+#[cfg(native_session)]
 pub(crate) struct SessionCueSink {
     enabled: std::sync::atomic::AtomicBool,
     start: std::sync::atomic::AtomicBool,
@@ -102,7 +102,7 @@ pub(crate) struct SessionCueSink {
     done: std::sync::atomic::AtomicBool,
 }
 
-#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+#[cfg(native_session)]
 impl SessionCueSink {
     pub(crate) fn new(enabled: bool, start: bool, stop: bool, done: bool) -> Self {
         Self {
@@ -114,7 +114,7 @@ impl SessionCueSink {
     }
 }
 
-#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+#[cfg(native_session)]
 impl CueSink for SessionCueSink {
     fn play(&self, kind: CueKind) {
         let enabled = self.enabled.load(std::sync::atomic::Ordering::Relaxed);
@@ -448,7 +448,7 @@ mod tests {
         assert!(!cue_selected(CueKind::Done, true, true, true, false));
     }
 
-    #[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+    #[cfg(native_session)]
     #[test]
     fn session_cue_sink_applies_live_event_switches_independently() {
         use std::sync::atomic::Ordering;

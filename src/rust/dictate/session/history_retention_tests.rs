@@ -173,7 +173,7 @@ fn history_retention_metrics_guard_uses_snapshot_and_config_env_precedence() {
     restore_env("VOICEPI_METRICS_JSONL", old_metrics);
 }
 
-#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+#[cfg(native_session)]
 #[test]
 fn static_history_retention_protects_metrics_with_json_output_disabled() {
     use super::history_sink::history_sink_from_app_settings;

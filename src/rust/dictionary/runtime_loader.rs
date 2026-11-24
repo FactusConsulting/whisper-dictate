@@ -295,11 +295,7 @@ impl ReloadingDictionary {
     }
 
     /// Build a file-reloading provider from a typed session snapshot.
-    #[cfg(any(
-        all(feature = "whisper-rs-local", feature = "rust-injection"),
-        feature = "nemotron-local",
-        test
-    ))]
+    #[cfg(any(native_session, feature = "nemotron-local", test))]
     #[allow(dead_code)]
     pub(crate) fn from_settings(settings: RuntimeDictionarySettings) -> Self {
         let mut provider = Self {

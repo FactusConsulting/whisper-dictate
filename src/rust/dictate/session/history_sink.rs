@@ -356,7 +356,7 @@ pub fn history_sink_from_settings() -> Option<Box<dyn HistorySink + Send>> {
 }
 
 /// Build the non-live history sink from an already-resolved native snapshot.
-#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+#[cfg(native_session)]
 pub(crate) fn history_sink_from_app_settings(
     settings: &crate::config::AppSettings,
 ) -> Option<Box<dyn HistorySink + Send>> {
