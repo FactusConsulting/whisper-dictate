@@ -1,7 +1,7 @@
 //! Native reinjection used by the floating UI's transcript actions.
 
 use anyhow::{anyhow, Result};
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "rust-hotkeys"))]
 use std::sync::atomic::AtomicBool;
 use std::sync::Mutex;
 use std::sync::{Arc, OnceLock};
@@ -107,8 +107,8 @@ static EPHEMERAL_BACKENDS: OnceLock<Mutex<Vec<Arc<EnigoInjectBackend>>>> = OnceL
 static SHARED_RESTORE_STATE: Mutex<Option<Arc<Mutex<RestoreState>>>> = Mutex::new(None);
 
 /// The registered session restore coordinator, when any. Read only by
-/// the Windows paste-last path.
-#[cfg(target_os = "windows")]
+/// the Windows paste-last path, which needs `rust-hotkeys`.
+#[cfg(all(target_os = "windows", feature = "rust-hotkeys"))]
 fn shared_restore_state() -> Option<Arc<Mutex<RestoreState>>> {
     SHARED_RESTORE_STATE
         .lock()
@@ -163,9 +163,12 @@ pub(crate) fn register_runtime_backend(backend: &Arc<EnigoInjectBackend>) {
 /// Register a paste-last press's short-lived backend. Prunes idle
 /// ephemeral entries first; never touches [`RUNTIME_BACKENDS`].
 ///
-/// The only caller is the Windows-only paste-last hotkey path, so
-/// non-Windows builds legitimately never call it.
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+/// The only caller is the Windows-only paste-last hotkey path, so builds
+/// without Windows and `rust-hotkeys` legitimately never call it.
+#[cfg_attr(
+    not(all(target_os = "windows", feature = "rust-hotkeys")),
+    allow(dead_code)
+)]
 fn register_ephemeral_backend(backend: &Arc<EnigoInjectBackend>) {
     let slot = EPHEMERAL_BACKENDS.get_or_init(|| Mutex::new(Vec::new()));
     let mut backends = slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -302,7 +305,7 @@ pub(crate) fn copy_with_pending_restore_cancelled<T, E>(
 ///
 /// The result carries the caller-facing error; the hotkey worker logs it
 /// through `RuntimeEvent::Stderr` with ASCII escaping.
-#[cfg(target_os = "windows")]
+#[cfg(all(target_os = "windows", feature = "rust-hotkeys"))]
 pub(crate) fn paste_last_into_focused_window(
     text: &str,
     mode: &str,
