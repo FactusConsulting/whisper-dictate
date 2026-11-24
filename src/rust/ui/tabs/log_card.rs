@@ -162,13 +162,19 @@ fn diagnostic_detail_hover(line: &str) -> Option<&'static str> {
     None
 }
 
-pub(in crate::ui) fn runtime_log_card(
+/// Draw one log card. A card that carries a transcript gets a copy button at
+/// its right edge, enabled by `copy_enabled`; the return value is the
+/// transcript when that button was clicked.
+pub(in crate::ui) fn runtime_log_card<'a>(
     ui: &mut egui::Ui,
-    card: &RuntimeLogCard,
+    card: &'a RuntimeLogCard,
     badge: &str,
     palette: UiPalette,
-) {
+    copy: Option<(bool, &str)>,
+) -> Option<&'a str> {
     let (icon, accent, fill) = runtime_log_card_style(card.kind, palette);
+    let transcript = card.transcript();
+    let mut copied = None;
     egui::Frame::default()
         .fill(fill)
         .stroke(egui::Stroke::new(0.8, palette.border_soft))
@@ -185,9 +191,30 @@ pub(in crate::ui) fn runtime_log_card(
                     });
                 ui.add_space(4.0);
                 ui.label(egui::RichText::new(icon).size(20.0).color(accent));
-                ui.vertical(|ui| runtime_log_card_text(ui, card, badge, accent, palette));
+                if let (Some(text), Some((enabled, hover))) = (transcript, copy) {
+                    // Laid out right to left first, so the text column wraps
+                    // in the width the button leaves.
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                        let button = egui::Button::new(
+                            egui::RichText::new(icons::ICON_CONTENT_COPY.codepoint).size(16.0),
+                        );
+                        if ui
+                            .add_enabled(enabled, button)
+                            .on_hover_text(hover)
+                            .clicked()
+                        {
+                            copied = Some(text);
+                        }
+                        ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                            runtime_log_card_text(ui, card, badge, accent, palette)
+                        });
+                    });
+                } else {
+                    ui.vertical(|ui| runtime_log_card_text(ui, card, badge, accent, palette));
+                }
             });
         });
+    copied
 }
 
 pub(in crate::ui) fn empty_log_state(
