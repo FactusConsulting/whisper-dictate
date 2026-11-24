@@ -148,10 +148,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// True while recording once the buffer reached `max_record_s`; the
     /// native capture lifecycle then closes the microphone (#323).
     #[cfg(feature = "audio-capture")]
-    #[cfg_attr(
-        not(all(feature = "whisper-rs-local", feature = "rust-injection")),
-        allow(dead_code)
-    )]
+    #[cfg_attr(not(native_session), allow(dead_code))]
     pub(crate) fn recording_buffer_full(&self) -> bool {
         matches!(self.state, SessionState::Recording { .. })
             && self

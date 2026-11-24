@@ -584,8 +584,13 @@ jobs:
       # (`in_process::resume_key_names_from_env`) is gated on, and the
       # local-session trio the native dictation session is gated on.
       - name: Rust feature-set checks
+        # Warnings are errors here: a partial set that compiles code nothing
+        # in it can reach shows up as dead code, the sign of a cfg gate that
+        # names too few features.
         if: env.RUN_RUST == 'true' && matrix.profile.role == 'features'
         shell: bash
+        env:
+          RUSTFLAGS: -D warnings
         run: |
           set -euo pipefail
           for features in rust-hotkeys audio-capture rust-hotkeys,rust-injection whisper-rs-local,audio-capture,rust-injection; do

@@ -9,10 +9,7 @@
 
 #![cfg(feature = "audio-capture")]
 // The production caller (`rust_session_audio`) needs the full backend set.
-#![cfg_attr(
-    not(all(feature = "whisper-rs-local", feature = "rust-injection")),
-    allow(dead_code)
-)]
+#![cfg_attr(not(native_session), allow(dead_code))]
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, TryLockError};

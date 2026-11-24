@@ -109,7 +109,7 @@ pub fn parse_gpu_policy_from_env() -> Result<GpuPolicy> {
 }
 
 /// Parse an already-resolved explicit policy with the typed device fallback.
-#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+#[cfg(native_session)]
 pub(crate) fn parse_gpu_policy(explicit: Option<&str>, device: Option<&str>) -> Result<GpuPolicy> {
     match explicit {
         Some(raw) => parse_gpu_policy_str(raw),

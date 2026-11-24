@@ -126,7 +126,7 @@ mod session_recording_actions;
 // this module to construct a `DictateSession<ProductionTranscribeBackend,
 // ProductionInjectBackend>`; on feature absence OR construction failure the
 // builder returns an error and the runtime refuses to start.
-#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+#[cfg(native_session)]
 pub(crate) mod rust_session_real_backends;
 
 // rust_session_real_backends.rs:372 -- the in-process
@@ -134,7 +134,7 @@ pub(crate) mod rust_session_real_backends;
 // channel (the pre-fix sink wrote them to stderr, invisible to the
 // in-process UI). Split into its own module so the parent stays
 // under the AGENTS.md 500-LOC modularity limit.
-#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+#[cfg(native_session)]
 pub(crate) mod rust_session_preview;
 
 // Production `InjectBackend` wrapper that honors
@@ -144,7 +144,7 @@ pub(crate) mod rust_session_preview;
 // delegates for the Enigo arm. Gated on the same feature pair the
 // real-backend module requires; without whisper-rs-local nothing
 // constructs the wrapper and its items would dead-code.
-#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+#[cfg(native_session)]
 pub(crate) mod rust_session_inject;
 
 // Push-to-talk microphone lifecycle (#323): the capture device is open only
@@ -163,11 +163,7 @@ pub(crate) mod recording_capture;
 
 // Production CPAL opener for the push-to-talk lifecycle. Gated on all three
 // features the full backend requires.
-#[cfg(all(
-    feature = "whisper-rs-local",
-    feature = "rust-injection",
-    feature = "audio-capture"
-))]
+#[cfg(native_session)]
 pub(crate) mod rust_session_audio;
 
 // ---------------------------------------------------------------------------

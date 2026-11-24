@@ -321,7 +321,7 @@ pub fn metrics_sink_from_settings() -> Option<Box<dyn MetricsSink + Send>> {
 }
 
 /// Build the non-live metrics sink from an already-resolved native snapshot.
-#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+#[cfg(native_session)]
 pub(crate) fn metrics_sink_from_app_settings(
     settings: &crate::config::AppSettings,
 ) -> Option<Box<dyn MetricsSink + Send>> {

@@ -13,14 +13,11 @@
 //!
 //! # Gating
 //!
-//! The whole module is `#[cfg(all(feature = "whisper-rs-local", feature
-//! = "rust-injection"))]`: default builds compile none of it, and a
-//! build with only one feature makes the sink builder return an `Err`
-//! naming the rebuild command (`--no-default-features --features
-//! shipping`; the `audio-capture` feature is required as well, since
-//! without it the constructor returns `Err`). The only caller lives
-//! behind `rust-hotkeys`, so a build without that feature tolerates the
-//! module being unreferenced.
+//! The whole module is `#[cfg(native_session)]` (set by `build.rs` when
+//! `whisper-rs-local`, `rust-injection`, `rust-hotkeys` and
+//! `audio-capture` are all enabled): any other build compiles none of it,
+//! and the sink builder returns an `Err` naming the rebuild command
+//! (`--no-default-features --features shipping`).
 //!
 //! # Why this lives in its own module
 //!
@@ -37,7 +34,6 @@
 //! `formatting::apply_format_commands` -> per-utterance health-line
 //! bookkeeping between transcription and injection. That chaining is
 //! tracked in `wave5-pr5-postprocess`.
-#![cfg_attr(not(feature = "rust-hotkeys"), allow(dead_code))]
 
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
@@ -392,20 +388,6 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                 .then(|| runtime.settings().stt_provider.clone())
         })
         .unwrap_or_default();
-    // `audio-capture` is required for the audio pump. On a
-    // build without it the constructor refuses with a human-readable
-    // message that names the rebuild command.
-    #[cfg(not(feature = "audio-capture"))]
-    {
-        // Silence "unused" warnings on the non-audio build: `tx`
-        // `repaint_notifier` are only consumed by the audio pump.
-        let _ = (tx, repaint_notifier, runtime_active, config_path);
-        Err("audio-capture feature not compiled in; rebuild with \
-             `--no-default-features --features shipping` to \
-             enable the real native session"
-            .to_owned())
-    }
-    #[cfg(feature = "audio-capture")]
     {
         let settings = runtime.settings();
         let lookup = |name: &str| runtime.value(name).map(str::to_owned);

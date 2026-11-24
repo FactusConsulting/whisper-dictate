@@ -10,7 +10,7 @@ use super::coordinator::spawn as spawn_coordinator;
 use super::coordinator::CoordinatorHandle;
 #[cfg(feature = "rust-hotkeys")]
 use super::coordinator::CoordinatorThread;
-#[cfg(all(test, feature = "rust-injection"))]
+#[cfg(all(test, feature = "rust-hotkeys", feature = "rust-injection"))]
 use super::coordinator::Options;
 #[cfg(feature = "rust-hotkeys")]
 use super::coordinator::{self, CoordinatorEvent};
@@ -20,7 +20,7 @@ use super::inject_guard::InjectionGuard;
 use super::manager::{self, ManagerHandle, ManagerThread};
 #[cfg(feature = "rust-hotkeys")]
 use super::ptt_lock;
-#[cfg(all(test, feature = "rust-injection"))]
+#[cfg(all(test, feature = "rust-hotkeys", feature = "rust-injection"))]
 use std::time::Instant;
 
 #[cfg(feature = "rust-hotkeys")]

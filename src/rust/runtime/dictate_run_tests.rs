@@ -124,15 +124,7 @@ fn features_available_matches_cfg() {
 
 #[test]
 fn production_features_available_matches_cfg() {
-    assert_eq!(
-        production_features_available(),
-        cfg!(all(
-            feature = "rust-hotkeys",
-            feature = "rust-injection",
-            feature = "audio-capture",
-            feature = "whisper-rs-local"
-        ))
-    );
+    assert_eq!(production_features_available(), cfg!(native_session));
 }
 
 #[cfg(not(all(feature = "rust-hotkeys", feature = "rust-injection")))]

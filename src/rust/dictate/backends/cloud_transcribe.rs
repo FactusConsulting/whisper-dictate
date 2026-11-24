@@ -503,7 +503,7 @@ impl CloudTranscribeBackend {
     }
 
     /// Bind speech-gate and rate-limit settings to this in-process session.
-    #[cfg(any(test, all(feature = "whisper-rs-local", feature = "rust-injection")))]
+    #[cfg(any(test, native_session))]
     pub(crate) fn with_transcription_guards(self, guards: TranscriptionGuards) -> Self {
         self.overrides.set_guards(guards);
         self
@@ -529,7 +529,7 @@ impl CloudTranscribeBackend {
     }
 
     /// Attach a dictionary prompt provider owned by the in-process runtime.
-    #[cfg(any(test, all(feature = "whisper-rs-local", feature = "rust-injection")))]
+    #[cfg(any(test, native_session))]
     pub(crate) fn with_reloading_prompt_settings(
         mut self,
         settings: crate::dictionary::RuntimeDictionarySettings,

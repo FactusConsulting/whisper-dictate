@@ -21,7 +21,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// Enable hooks from session-owned settings while the runtime remains
     /// active. Used by the in-process runtime so `--config PATH` never falls
     /// through to another config source.
-    #[cfg(any(test, all(feature = "whisper-rs-local", feature = "rust-injection")))]
+    #[cfg(any(test, native_session))]
     pub(crate) fn with_owned_command_hook_activity(
         mut self,
         runtime_active: Arc<AtomicBool>,
@@ -205,7 +205,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
 
     /// Attach a file-reloading dictionary whose settings are owned by this
     /// native session rather than re-read from the process environment.
-    #[cfg(any(test, all(feature = "whisper-rs-local", feature = "rust-injection")))]
+    #[cfg(any(test, native_session))]
     pub(crate) fn with_reloading_dictionary_settings(
         mut self,
         settings: crate::dictionary::RuntimeDictionarySettings,

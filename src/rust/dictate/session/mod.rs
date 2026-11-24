@@ -46,13 +46,13 @@ mod transcription_boundary_tests;
 #[cfg(test)]
 mod wire_tests;
 
-#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+#[cfg(native_session)]
 pub(crate) use history_sink::history_sink_from_app_settings;
 pub use history_sink::{
     effective_history_settings, history_sink_from_settings, EffectiveHistorySettings, HistorySink,
     JsonlHistorySink, NoopHistorySink, ReloadingHistorySink,
 };
-#[cfg(all(feature = "whisper-rs-local", feature = "rust-injection"))]
+#[cfg(native_session)]
 pub(crate) use metrics_sink::metrics_sink_from_app_settings;
 pub use metrics_sink::{
     effective_metrics_settings, metrics_sink_from_settings, EffectiveMetricsSettings,
@@ -257,10 +257,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
     /// Emit worker events unconditionally for this owned in-process session.
     /// Compatibility CLI/process-boundary callers keep the default env gate.
     /// Only the real-backend session constructor calls this in production.
-    #[cfg_attr(
-        not(all(feature = "whisper-rs-local", feature = "rust-injection")),
-        allow(dead_code)
-    )]
+    #[cfg_attr(not(native_session), allow(dead_code))]
     pub(crate) fn with_worker_events_enabled(mut self) -> Self {
         self.worker_event_output = crate::dictate::events::WorkerEventOutput::Enabled;
         self

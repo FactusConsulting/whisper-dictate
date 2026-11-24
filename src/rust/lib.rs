@@ -152,3 +152,9 @@ pub mod ui;
 // `transcribe-wav` dispatcher still sit behind the `whisper-rs-local`
 // feature (which pulls whisper.cpp / CMake).
 pub mod whisper;
+
+// `ctrlc` serves only `dictate-run`, which needs `rust-hotkeys` and
+// `rust-injection`; cargo cannot make a dependency conditional on two
+// features, so other builds mark it as deliberately unused.
+#[cfg(not(all(feature = "rust-hotkeys", feature = "rust-injection")))]
+use ctrlc as _;

@@ -18,10 +18,7 @@
 //! Nothing reopens a stream while idle.
 
 #![cfg(feature = "audio-capture")]
-#![cfg_attr(
-    not(all(feature = "whisper-rs-local", feature = "rust-injection")),
-    allow(dead_code)
-)]
+#![cfg_attr(not(native_session), allow(dead_code))]
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};

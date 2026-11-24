@@ -141,7 +141,7 @@ impl ReloadingProfileMatcher {
     }
 
     /// Bind reloads to the config selected for this runtime session.
-    #[cfg(any(test, all(feature = "whisper-rs-local", feature = "rust-injection")))]
+    #[cfg(any(test, native_session))]
     pub(crate) fn with_config_path(config_path: Option<std::path::PathBuf>) -> Self {
         Self { config_path }
     }

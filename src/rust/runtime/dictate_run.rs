@@ -86,12 +86,7 @@ pub const fn features_available() -> bool {
 /// merely installing the hotkey/sink wiring. Reduced Linux source builds omit
 /// these heavier features and fail the native-session check.
 pub const fn production_features_available() -> bool {
-    cfg!(all(
-        feature = "rust-hotkeys",
-        feature = "rust-injection",
-        feature = "audio-capture",
-        feature = "whisper-rs-local"
-    ))
+    cfg!(native_session)
 }
 
 // Stub path: keeps the compiler quiet on `_args` when the features are off
