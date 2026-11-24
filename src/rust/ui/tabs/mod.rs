@@ -14,6 +14,8 @@ mod hotkey_verify;
 #[path = "hotkey_verify_tests.rs"]
 mod hotkey_verify_tests;
 mod log_card;
+#[cfg(test)]
+mod log_card_tests;
 mod output;
 #[cfg(test)]
 #[path = "output_tests.rs"]
