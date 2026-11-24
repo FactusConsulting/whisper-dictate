@@ -17,9 +17,14 @@ cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
 `cargo-nextest` is the CI runner. It does not run doctests, so retain the
 separate `cargo test --doc` command.
 
-In CI, pull requests run every standalone feature-matrix cell (`base`,
-`hotkeys`, `audio`, `hotkeys-injection`, `local-injection`, `shipping`,
-`clippy-glow`) so feature-gating breaks are caught before merge. Push to
+In CI, pull requests run four feature-matrix cells per OS: the test suite
+for `base` (no optional feature) and `shipping` (all of them), `clippy-glow`,
+and `features`, which runs `cargo check --all-targets` for each partial
+feature set the product supports alone (`rust-hotkeys`, `audio-capture`,
+`rust-hotkeys,rust-injection`, `whisper-rs-local,audio-capture,rust-injection`)
+and, on Linux, the tests gated on a partial set that neither `base` nor
+`shipping` compiles. Feature-gating breaks are caught before merge without a
+full test build per set. Push to
 `main` and the release validation run only the exact `shipping` profile and
 `clippy-glow` cells. The anchor cell (`base` on pull requests, `shipping`
 otherwise) owns rustfmt, the Windows native GUI smoke, and the Windows

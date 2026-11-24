@@ -375,43 +375,24 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-2025]
-        # Each profile owns ONE cargo invocation. `feature_arg` is the
-        # verbatim cargo flag (empty for the default feature set); `role`
-        # selects test vs clippy in the step gates below. Keep the
-        # feature-gated cells STANDALONE (not merged): cargo features
-        # are additive, so code gated on one feature can accidentally
-        # reference an item only present under another; a combined-only
-        # test would compile while the standalone case breaks for users
-        # who enable that one feature alone. Pull requests run every
-        # cell; push to main and the release workflow_call run only the
-        # `shipping` and `clippy-glow` cells (see `exclude` below).
+        # Each profile owns one role: `test` runs the suite for its
+        # `feature_arg` (the verbatim cargo flag, empty for the default
+        # feature set), `clippy` lints, `features` type-checks the partial
+        # feature sets. Two test cells bound the feature space: `base` (no
+        # optional feature) and `shipping` (all of them); every test that
+        # compiles under a partial set also compiles under one of those two,
+        # except where a test needs a feature AND the absence of another,
+        # which the `features` cell runs on its own. The partial sets
+        # themselves can still break alone, because cargo features are
+        # additive: code gated on one may reference an item only another
+        # provides. The `features` cell catches that with `cargo check
+        # --all-targets` per set, tests included, without the codegen and
+        # link of a full test build. Pull requests run every cell; push to
+        # main and the release workflow_call run only the `shipping` and
+        # `clippy-glow` cells (see `exclude` below).
         profile:
           - id: base
             feature_arg: ""
-            role: test
-          - id: hotkeys
-            feature_arg: "--features rust-hotkeys"
-            role: test
-          - id: audio
-            feature_arg: "--features audio-capture"
-            role: test
-          # The in-process resume path (`in_process::resume_key_names_from_env`)
-          # is `cfg(all(rust-hotkeys, rust-injection))`, so the dead-manager
-          # regression tests that guard the Windows PTT fallback wedge
-          # compile in NEITHER the standalone `hotkeys` cell nor `audio`.
-          # Without this pair cell they would run in no `cargo test`
-          # invocation at all. Added alongside, not instead of, the standalone
-          # cells, so the one-feature-alone breakage the comment above
-          # warns about stays covered.
-          - id: hotkeys-injection
-            feature_arg: "--features rust-hotkeys,rust-injection"
-            role: test
-          # The native dictation session is gated on whisper-rs-local +
-          # audio-capture + rust-injection. Keep this combination explicit so
-          # its auto-injection dispatch and clipboard-fallback tests run on
-          # Windows and Linux.
-          - id: local-injection
-            feature_arg: "--features whisper-rs-local,audio-capture,rust-injection"
             role: test
           # Exact normal package profile. This runs on Linux and Windows so the
           # supported artifact feature surface is tested before release.
@@ -421,11 +402,14 @@ jobs:
           - id: clippy-glow
             feature_arg: "--features ui-egui-glow"
             role: clippy
+          - id: features
+            feature_arg: ""
+            role: features
         # Push to main and the release workflow_call (whose `github.event_name`
         # is the caller's event) test only the exact shipped feature set: the
         # standalone cells already gated the PR that produced the commit.
         # Excluding them here means no runner is allocated for them at all.
-        exclude: ${{ fromJSON(github.event_name == 'pull_request' && '[]' || '[{"profile":{"id":"base"}},{"profile":{"id":"hotkeys"}},{"profile":{"id":"audio"}},{"profile":{"id":"hotkeys-injection"}},{"profile":{"id":"local-injection"}}]') }}
+        exclude: ${{ fromJSON(github.event_name == 'pull_request' && '[]' || '[{"profile":{"id":"base"}},{"profile":{"id":"features"}}]') }}
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'arc-runner-public' || matrix.os }}
     env:
       # `rust` output is the per-language gate (issue #590):
@@ -470,7 +454,7 @@ jobs:
           # the toolchain-component policy check happy.
           components: clippy
       - name: Install cargo-nextest
-        if: env.RUN_RUST == 'true' && matrix.profile.role == 'test'
+        if: env.RUN_RUST == 'true' && (matrix.profile.role == 'test' || (matrix.profile.role == 'features' && runner.os == 'Linux'))
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
@@ -515,19 +499,39 @@ jobs:
       - name: Rust tests (Windows non-anchor)
         if: env.RUN_RUST == 'true' && runner.os == 'Windows' && matrix.profile.role == 'test' && matrix.profile.id != env.ANCHOR_PROFILE
         run: cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci -E 'not(binary(=repository_policy)) and not(test(=ui::app_tests::view::hidden_windows_event_loop_drains_runtime_and_tray_without_ui))' ${{ matrix.profile.feature_arg }}
+      # Each partial feature set the product supports on its own: the two
+      # backends alone, the hotkey+injection pair the in-process resume path
+      # (`in_process::resume_key_names_from_env`) is gated on, and the
+      # local-session trio the native dictation session is gated on.
+      - name: Rust feature-set checks
+        if: env.RUN_RUST == 'true' && matrix.profile.role == 'features'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for features in rust-hotkeys audio-capture rust-hotkeys,rust-injection whisper-rs-local,audio-capture,rust-injection; do
+            echo "::group::cargo check --features $features"
+            cargo check --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --all-targets --features "$features"
+            echo "::endgroup::"
+          done
+      - name: Rust tests that need a partial feature set
+        # `cfg(all(rust-hotkeys, rust-injection, not(whisper-rs-local)))`:
+        # compiled in neither `base` nor `shipping`. The assertion is
+        # platform-independent, so Linux runs it once.
+        if: env.RUN_RUST == 'true' && matrix.profile.role == 'features' && runner.os == 'Linux'
+        run: cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci --features rust-hotkeys,rust-injection -E 'test(=runtime::rust_session_sink_tests::production_sink_refuses_without_real_backends)'
       - name: Windows release-script fixture
         if: env.RUN_RUST == 'true' && runner.os == 'Windows' && matrix.profile.id == env.ANCHOR_PROFILE
         run: cargo test --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --test repository_policy windows_extracted_release_scripts_parse_and_execute_cpu_fallback_fixture -- --exact
       - name: Audio capture report gate
-        # This audio cell feeds the required rust aggregators on pull requests.
-        # Do not hide build failures or unexpected self-test errors as missing
-        # hardware. Push and release runs get the same report gate from the
-        # `integration-ubuntu-2604` audio-capture self-test.
-        if: env.RUN_RUST == 'true' && runner.os == 'Linux' && matrix.profile.id == 'audio'
+        # The shipping cell feeds the required rust aggregators on pull
+        # requests. Do not hide build failures or unexpected self-test errors
+        # as missing hardware. Push and release runs get the same report gate
+        # from the `integration-ubuntu-2604` audio-capture self-test.
+        if: env.RUN_RUST == 'true' && runner.os == 'Linux' && matrix.profile.id == 'shipping' && github.event_name == 'pull_request'
         shell: bash
         run: |
           cargo build --manifest-path src/rust/Cargo.toml --locked --target-dir target \
-            -p whisper-dictate-app --features audio-capture --bin wd
+            -p whisper-dictate-app --no-default-features --features shipping --bin wd
           bash scripts/integration/audio-capture-smoke.sh "$PWD/target/debug/wd"
   # ---------------------------------------------------------------------------
   # rust: required-status aggregator. Retains the `rust (ubuntu-latest)` and
