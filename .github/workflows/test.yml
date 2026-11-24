@@ -292,11 +292,11 @@ jobs:
           ref: ${{ inputs.ref }}
           # Sonar's new-code detection and blame read the full history.
           fetch-depth: 0
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         if: env.SONAR_TOKEN != ''
         with:
           name: sonar-lcov
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         if: env.SONAR_TOKEN != ''
         with:
           name: sonar-clippy
@@ -532,7 +532,7 @@ jobs:
         run: cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --features ui-egui-glow --message-format=json -- -D warnings > clippy-report.json
       - name: Upload the clippy report
         if: env.RUN_RUST == 'true' && matrix.profile.role == 'clippy' && runner.os == 'Linux'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sonar-clippy
           path: clippy-report.json
@@ -574,7 +574,7 @@ jobs:
           echo "LCOV SF records: $(grep -c '^SF:' lcov.info), sample: $(grep -m1 '^SF:' lcov.info)"
       - name: Upload the coverage report
         if: env.RUN_RUST == 'true' && runner.os == 'Linux' && matrix.profile.id == 'shipping'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sonar-lcov
           path: lcov.info
