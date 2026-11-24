@@ -276,9 +276,9 @@ function Get-CargoLegs {
         }
         # The in-process resume path is cfg(all(rust-hotkeys, rust-injection)),
         # so the dead-manager regressions compile in NEITHER standalone
-        # cell. CI runs a `hotkeys-injection` matrix cell for exactly this;
-        # mirror it here or the wrapper prints "ready to push" while that
-        # CI cell fails.
+        # cell. CI type-checks this pair and runs its partial-set test in
+        # the `features` cell; the full suite here is the stricter local
+        # mirror.
         $legs += @{
             Name = 'cargo nextest run --features rust-hotkeys,rust-injection'
             Argv = @(

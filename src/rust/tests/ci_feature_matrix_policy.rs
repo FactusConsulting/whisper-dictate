@@ -1,7 +1,9 @@
 //! Event-dependent shape of the `rust-features` CI matrix.
 //!
-//! Pull requests run every standalone feature cell so feature-gating breaks
-//! are caught before merge. Push to main and the release `workflow_call`
+//! Pull requests test the two ends of the feature space (`base` and
+//! `shipping`) and type-check each partial feature set in the `features`
+//! cell, so feature-gating breaks are caught before merge. Push to main and
+//! the release `workflow_call`
 //! (whose `github.event_name` is the caller's `push` / `workflow_dispatch`)
 //! run only the exact shipped feature set plus clippy. The anchor cell that
 //! owns the once-per-run checks must exist on every event.
@@ -78,19 +80,54 @@ fn cells(job: &str, event_name: &str) -> BTreeSet<String> {
 }
 
 #[test]
-fn pull_requests_run_every_standalone_feature_cell() {
+fn pull_requests_run_every_cell() {
     let job = rust_features_job();
     let all: BTreeSet<_> = profile_ids(&job).into_iter().collect();
-    for required in [
-        "base",
-        "hotkeys",
-        "audio",
-        "hotkeys-injection",
-        "local-injection",
-    ] {
-        assert!(all.contains(required), "missing standalone cell {required}");
+    for required in ["base", "shipping", "clippy-glow", "features"] {
+        assert!(all.contains(required), "missing cell {required}");
     }
     assert_eq!(cells(&job, "pull_request"), all);
+}
+
+/// The partial feature sets each compile on their own, tests included, and a
+/// test gated on a partial set (one that `base` and `shipping` both exclude)
+/// still runs.
+#[test]
+fn the_features_cell_checks_each_partial_feature_set() {
+    let job = rust_features_job();
+    let checks = job
+        .split("      - name: Rust feature-set checks\n")
+        .nth(1)
+        .and_then(|body| body.split("\n      - name: ").next())
+        .expect("feature-set check step");
+    assert!(checks.contains("matrix.profile.role == 'features'"));
+    assert!(checks.contains("cargo check "));
+    assert!(checks.contains("--all-targets"));
+    let sets = checks
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("for features in "))
+        .and_then(|rest| rest.strip_suffix("; do"))
+        .expect("feature-set loop");
+    let sets: BTreeSet<_> = sets.split_whitespace().collect();
+    for required in [
+        "rust-hotkeys",
+        "audio-capture",
+        "rust-hotkeys,rust-injection",
+        "whisper-rs-local,audio-capture,rust-injection",
+    ] {
+        assert!(
+            sets.contains(required),
+            "feature set {required} is not checked"
+        );
+    }
+    let partial_tests = job
+        .split("      - name: Rust tests that need a partial feature set\n")
+        .nth(1)
+        .expect("partial-feature-set test step");
+    assert!(partial_tests.contains("--features rust-hotkeys,rust-injection"));
+    assert!(partial_tests.contains(
+        "test(=runtime::rust_session_sink_tests::production_sink_refuses_without_real_backends)"
+    ));
 }
 
 #[test]

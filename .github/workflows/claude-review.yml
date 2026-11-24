@@ -13,8 +13,8 @@ name: Claude PR review
 on:
   pull_request:
     types: [opened]
-    # NO paths-ignore here, deliberately — see sonar.yml, which does
-    # have one. This workflow subscribes to `opened` ONLY, so it gets
+    # NO paths-ignore here, deliberately. Sonar (in test.yml) is gated on
+    # changed paths. This workflow subscribes to `opened` ONLY, so it gets
     # exactly one shot per pull request. Filtering that shot on paths
     # means a PR opened with just a README edit is skipped, and if code
     # is pushed to it afterwards the `synchronize` event has nothing
