@@ -510,7 +510,10 @@ impl EnigoInjectBackend {
     /// overlapping paste cycles (session + paste-last) coordinate their
     /// original/generation bookkeeping instead of each restoring its own
     /// view of the clipboard.
-    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    #[cfg_attr(
+        not(all(target_os = "windows", feature = "rust-hotkeys")),
+        allow(dead_code)
+    )]
     pub(crate) fn with_restore_handle(mut self, restore: Arc<Mutex<RestoreState>>) -> Self {
         self.inner
             .get_mut()
@@ -539,7 +542,7 @@ impl EnigoInjectBackend {
     /// Keep a pending paste restore alive if an explicit clipboard write
     /// fails. Holding the restore lock also prevents its timer from racing a
     /// successful write before we retire the old restore generation.
-    #[cfg(any(target_os = "windows", test))]
+    #[cfg(any(all(target_os = "windows", feature = "rust-hotkeys"), test))]
     pub(crate) fn with_restore_guard<T, E>(
         &self,
         write: impl FnOnce() -> Result<T, E>,
