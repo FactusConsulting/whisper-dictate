@@ -179,7 +179,7 @@ pub(in crate::ui) fn post_key_is_ambient_env_owned(
 impl WhisperDictateApp {
     /// Recolour the system-tray icon to mirror the current dictation state and
     /// react to a tray left-click by focusing the main window. Purely additive:
-    /// on non-Windows it is a no-op stub, and even on Windows a failed tray init
+    /// on platforms without a tray it is a no-op stub, and a failed tray init
     /// is logged exactly once and then ignored — the dictation flow never depends
     /// on the tray.
     ///
