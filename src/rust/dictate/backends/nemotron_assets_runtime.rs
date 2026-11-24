@@ -70,33 +70,13 @@ fn extract_runtime_with_policy(
     scavenge_stale_siblings(destination, "runtime-partial", STALE_STAGING_AGE);
     let staging = unique_sibling_path(destination, "runtime-partial");
     fs::create_dir_all(&staging).with_context(|| format!("create {}", staging.display()))?;
-    let status_result = if cfg!(windows) {
-        let mut command = Command::new("powershell.exe");
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
-        command.args([
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-Command",
-                "Expand-Archive -LiteralPath $env:VOICEPI_NEMOTRON_ARCHIVE -DestinationPath $env:VOICEPI_NEMOTRON_DESTINATION -Force",
-            ])
-            .env("VOICEPI_NEMOTRON_ARCHIVE", archive)
-            .env("VOICEPI_NEMOTRON_DESTINATION", &staging);
-        run_extraction_command(&mut command, runtime_active)
-    } else {
-        let mut command = Command::new("tar");
-        command
-            .args(["-xzf"])
-            .arg(archive)
-            .args(["-C"])
-            .arg(&staging);
-        run_extraction_command(&mut command, runtime_active)
-    };
+    let mut command = archive_tar_command();
+    command
+        .args([if cfg!(windows) { "-xf" } else { "-xzf" }])
+        .arg(archive)
+        .args(["-C"])
+        .arg(&staging);
+    let status_result = run_extraction_command(&mut command, runtime_active);
     let status = match status_result {
         Ok(status) => status,
         Err(error) => {
@@ -130,6 +110,27 @@ fn extract_runtime_with_policy(
         replace_existing,
         runtime_active,
     )
+}
+
+/// The `tar` that unpacks the runtime archive: a `.zip` on Windows, a `.tar.gz`
+/// elsewhere. Windows ships bsdtar, which reads zip, as `System32\tar.exe`; it is
+/// named by absolute path so a GNU tar earlier on `PATH` (Git for Windows), which
+/// cannot read zip, is never the one run. Unlike `powershell.exe -Command
+/// Expand-Archive`, whose exit status stays 0 when the cmdlet fails, tar's exit
+/// status reports a failed extraction.
+pub(super) fn archive_tar_command() -> Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let system_root = std::env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into());
+        let mut command = Command::new(Path::new(&system_root).join("System32").join("tar.exe"));
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        command
+    }
+    #[cfg(not(windows))]
+    {
+        Command::new("tar")
+    }
 }
 
 fn write_runtime_marker_or_cleanup(
