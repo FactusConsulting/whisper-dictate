@@ -69,7 +69,7 @@ conditions hold:
    (e.g. compute shaders, custom render pipelines).
 
 To switch: flip `default = ["ui-egui-wgpu"]` in `src/rust/Cargo.toml` and update
-`sonar.yml`, `test.yml`, and `devcontainer.yml` to pass `--features ui-egui-wgpu`
+`test.yml` (its clippy cell feeds Sonar) and `devcontainer.yml` to pass `--features ui-egui-wgpu`
 instead of `--features ui-egui-glow`.
 
 ## When to replace the egui/eframe shell

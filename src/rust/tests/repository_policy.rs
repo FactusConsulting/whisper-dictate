@@ -1882,7 +1882,7 @@ fn native_probe_and_version_scripts_retain_regression_guards() {
 
 #[test]
 fn sonar_coverage_compiles_extracted_raw_hotkey_policy() {
-    let workflow = read_repo(".github/workflows/sonar.yml");
+    let workflow = read_repo(".github/workflows/test.yml");
     let coverage = workflow
         .lines()
         .find(|line| line.contains("run: cargo llvm-cov "))
@@ -1894,7 +1894,16 @@ fn sonar_coverage_compiles_extracted_raw_hotkey_policy() {
         .expect("explicit coverage features")
         .split(',')
         .collect::<Vec<_>>();
-    assert!(features.contains(&"rust-hotkeys"));
+    // Coverage measures the shipping feature set, which compiles the
+    // raw-hotkey policy modules.
+    assert_eq!(features, ["shipping"]);
+    let manifest = read_repo("src/rust/Cargo.toml");
+    let shipping = manifest
+        .split("\nshipping = [")
+        .nth(1)
+        .and_then(|rest| rest.split(']').next())
+        .expect("shipping feature");
+    assert!(shipping.contains("\"rust-hotkeys\""));
     assert!(workflow.contains("libxi-dev"));
     assert!(workflow.contains("libxtst-dev"));
     let sonar = read_repo("sonar-project.properties");
