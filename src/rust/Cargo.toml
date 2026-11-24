@@ -212,6 +212,9 @@ arboard = { version = "3.6", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus-secret-service-keyring-store = { version = "1.0", features = ["crypto-rust"] }
+# Linux tray icon: a StatusNotifierItem over zbus (`ui::tray_linux`). async-io
+# matches the zbus executor already in the lock; blocking runs it on its own thread.
+ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }
 # evdev: direct `/dev/input` keyboard listener for the `rust-hotkeys` feature on
 # Linux. `rdev` only speaks X11 (XRecord), which cannot observe global key
 # events on Wayland — so on GNOME/KDE Wayland the rdev listener is deaf and
@@ -231,7 +234,7 @@ apple-native-keyring-store = { version = "1.0", features = ["keychain"] }
 # make pipes nonblocking so teardown cannot leak an I/O worker.
 libc = "0.2"
 
-# Windows-only system-tray icon (notification area). Scoped to the Windows
+# Windows system-tray icon (notification area). Scoped to the Windows
 # target so the Linux/CI build never pulls in tray-icon's gtk/libxdo system
 # deps (its default features). On Windows it integrates with the winit/win32
 # event loop that eframe already pumps. The pure state→colour and RGBA logic
