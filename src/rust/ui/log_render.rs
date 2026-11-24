@@ -67,6 +67,17 @@ pub(in crate::ui) struct RuntimeLogCard {
     pub(in crate::ui) badge: String,
 }
 
+impl RuntimeLogCard {
+    /// The transcript a card carries, for its copy button: the final text of a
+    /// minimal card, or the text of a structured dictation card. Status,
+    /// diagnostic and health cards carry none.
+    pub(in crate::ui) fn transcript(&self) -> Option<&str> {
+        let is_transcript = self.kind == RuntimeLogCardKind::FinalText || self.badge == "Utterance";
+        let text = self.title.trim();
+        (is_transcript && !text.is_empty()).then_some(text)
+    }
+}
+
 /// All render-time information derived from one raw runtime-log line. The
 /// incremental cache keeps this projection so JSON and card classification are
 /// performed once when the line arrives, never again during repaint.
