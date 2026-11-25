@@ -121,9 +121,9 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | `cycle_mode_hotkey` | `VOICEPI_CYCLE_MODE_HOTKEY` | _(unset)_ | Value | Restart | Optional Windows GUI shortcut that rotates the post-processing mode through raw, clean, prompt, terminal, slack, email, and bullets (wrapping back to raw), then saves the setting and reports the new mode on the runtime log. Leave blank to disable. Requires the RegisterHotKey listener; changing it requires restarting the runtime. |
 | `raw_mode_hotkey` | `VOICEPI_RAW_MODE_HOTKEY` | _(unset)_ | Value | Restart | Optional Windows GUI shortcut that switches the post-processing mode to raw, saves the setting, and reports the new mode on the runtime log. Leave blank to disable. Requires the RegisterHotKey listener; changing it requires restarting the runtime. |
 | `clean_mode_hotkey` | `VOICEPI_CLEAN_MODE_HOTKEY` | _(unset)_ | Value | Restart | Optional Windows GUI shortcut that switches the post-processing mode to clean, saves the setting, and reports the new mode on the runtime log. Leave blank to disable. Requires the RegisterHotKey listener; changing it requires restarting the runtime. |
-| `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Value | Restart | Local Whisper model offered in Settings. Download the selected model explicitly before starting. Hidden legacy tiny, base, small, medium, tiny.en, base.en, and small.en values remain loadable so existing configurations and cached models continue to work. |
+| `model` | `VOICEPI_MODEL` | `large-v3-turbo` | Value | Restart | Local Whisper model. Settings only offers models that fit a supported Vulkan GPU. Danish Turbo (edda-v0.2) and Danish Quality (edda-v0.2-large) require an explicit selection and transcribe in Danish regardless of the language setting. Download the selected model explicitly before starting. Hidden legacy tiny, base, small, medium, tiny.en, base.en, and small.en values remain valid configuration values. |
 | `stt_backend` | `VOICEPI_STT_BACKEND` | `whisper` | Value | Restart | Speech-to-text engine: whisper (local native whisper.cpp) or openai (external OpenAI-compatible cloud API). |
-| `device` | `VOICEPI_DEVICE` | `auto` | Value | Restart | Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cuda selects the Nemotron CUDA runtime where a pinned asset is available; cpu disables GPU use. |
+| `device` | `VOICEPI_DEVICE` | `auto` | Value | Restart | Compute device for native local STT: auto selects a supported GPU backend; vulkan requests Vulkan; cuda selects the in-process Nemotron CUDA runtime where a pinned asset is available. Local transcription requires a supported GPU with enough memory and never falls back to CPU. The legacy cpu value is still recognized but is rejected for local transcription. |
 | `audio_device` | `VOICEPI_AUDIO_DEVICE` | _(unset)_ | Nullable | Restart | Microphone/capture device: empty = OS default, an integer device index, or a case-insensitive name substring (e.g. Yeti). Backend-independent. |
 | `lang` | `VOICEPI_LANG` | _(unset)_ | Nullable | Live | Spoken-language hint as an ISO 639-1 code (da, en, de, ...). Empty = auto-detect. Strongly recommended for Whisper. |
 | `inject_mode` | `VOICEPI_INJECT_MODE` | `auto` | Value | Live | Text output strategy: auto (type, paste on fragile Windows terminals), type (direct keystrokes), paste (clipboard + paste on X11/Windows), or print (stdout only). |
@@ -142,7 +142,7 @@ Every runtime setting, grouped by area. **Live** settings apply on the next reco
 | Key | Env var | Default | Config JSON | Live/Restart | Description |
 |---|---|---|---|---|---|
 | `stt_model` | `VOICEPI_STT_MODEL` | _(unset)_ | Nullable | Restart | Transcription model used when stt_backend=openai. Cloud providers use a model id (for example gpt-4o-mini-transcribe); Nemotron in-process accepts the official model id (downloaded and verified automatically) or an existing local .gguf path. |
-| `stt_base_url` | `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | Value | Restart | Transcription endpoint used when stt_backend=openai. OpenAI-compatible providers use an https URL; Nemotron uses Riva gRPC (grpc://localhost:50051 locally or https://grpc.nvcf.nvidia.com:443 hosted). Fresh Nemotron selections use inproc://nemotron and automatically download the verified runtime/model; append ?function-id=YOUR_FUNCTION_ID for a multilingual hosted deployment. |
+| `stt_base_url` | `VOICEPI_STT_BASE_URL` | `https://api.openai.com/v1` | Value | Restart | Transcription endpoint used when stt_backend=openai. OpenAI-compatible providers use an https URL; Nemotron uses Riva gRPC (grpc://localhost:50051 or https://grpc.nvcf.nvidia.com:443). With a suitable GPU, Nemotron can use inproc://nemotron and download the verified runtime and model. For hosted multilingual Nemotron, append ?function-id=YOUR_FUNCTION_ID. |
 | `stt_timeout_ms` | `VOICEPI_STT_TIMEOUT_MS` | `30000` | Value | Restart | Maximum wait (ms) for an external transcription request before it is abandoned. |
 | `local_only` | `VOICEPI_LOCAL_ONLY` | _(unset)_ | Value | Restart | Privacy lock: block cloud/BYOK backends and force model libraries into offline mode (HF/Transformers/W&B offline). A library/runtime guard, not an OS firewall rule. |
 
@@ -361,9 +361,9 @@ a JSON array for exact arguments (including embedded quotes):
 
 ### Recipe A — Local STT on GPU (Whisper)
 
-Run everything locally with the vendor-neutral Vulkan GPU backend. No network, no keys. See the
-[GPU VRAM sizing](#gpu-vram-sizing--what-to-set-per-card) guidance to pick a
-model for your free VRAM.
+Run Whisper locally on a supported Vulkan GPU. Dictation requires no network
+connection or API key once the model is installed. See
+[GPU memory sizing](#gpu-memory-sizing-for-local-whisper) before choosing a model.
 
 `config.json`:
 
@@ -395,11 +395,8 @@ export VOICEPI_DEVICE=vulkan
 export VOICEPI_LANG=da
 ```
 
-Notes:
-
-- **VRAM:** numeric precision is determined by the whisper.cpp model file, not
-  a runtime setting. Run `wd model-capacity` before loading; if
-  the first transcription runs out of memory, choose a smaller model.
+For Danish Edda, use the [manual GGML file setup](STT_BACKENDS.md#use-an-edda-model-from-a-local-file)
+instead of choosing a built-in model.
 
 ### Recipe B — Cloud STT + API key (Groq or OpenAI)
 
@@ -912,7 +909,7 @@ Passed after the Rust controller (`wd run -- ...`):
 | `--lang CODE` | `$VOICEPI_LANG` | ISO 639-1 code | Force language for this run. Omit to auto-detect. |
 | `--autodetect` | off | — | Force language auto-detect (overrides `--lang`/`VOICEPI_LANG`). |
 | `--prompt TEXT` | `$VOICEPI_INITIAL_PROMPT` | free text (~1024 chars), or `""` to disable | Domain-vocabulary hint seeded into Whisper's initial prompt for this run, e.g. `--prompt "Kubernetes, Proxmox, LiteLLM, ansible"`. Wins over `VOICEPI_INITIAL_PROMPT` / the saved `initial_prompt` setting and stays authoritative for the whole session (a live config reload won't override it). Pass `--prompt ""` to disable the hint for this run. |
-| `--device D` | `$VOICEPI_DEVICE` | `auto` \| `vulkan` \| `cuda` \| `cpu` | Compute device for this run. `vulkan` is only honoured by binaries built with `--features whisper-rs-vulkan`; `cuda` selects the in-process Nemotron CUDA runtime where its platform asset exists. Unsupported requests are refused rather than silently demoted. |
+| `--device D` | `$VOICEPI_DEVICE` | `auto` \| `vulkan` \| `cuda` | Compute device for local STT. Whisper requires a Vulkan-capable build; `cuda` selects the in-process Nemotron CUDA runtime where its platform asset exists. The legacy `cpu` value is still recognized but is rejected for local transcription, with a message explaining the GPU requirement. |
 | `--type` | `$VOICEPI_INJECT_MODE` or off | — | Force direct keyboard typing on X11/Windows. (Wayland always uses direct evdev keycodes regardless.) |
 | `--paste` | `$VOICEPI_INJECT_MODE` or off | — | Force native clipboard paste: copies text to the system clipboard, then sends the platform paste shortcut (Ctrl+V or Ctrl+Shift+V for terminals). Wayland uses the configured native helper chain; Windows and X11 use their native injection backends. If the previous clipboard could be read, it is restored after a short delay — but only when the clipboard still holds the injected text (your own copy in the meantime is never overwritten). On Windows a rich selection (HTML, RTF, images, Office data) is restored with all of its formats; a selection that cannot be saved (private or GDI-object formats, over 32 MiB) is left untouched, so paste fails and `auto` types instead. |
 | `--no-type` | `$VOICEPI_INJECT_MODE` or off | — | Print the transcription only, don't inject (testing). |
@@ -921,8 +918,8 @@ Passed after the Rust controller (`wd run -- ...`):
 | `wd setup` | off | — | Rust-native interactive config wizard (no model load): derives defaults, choices, and numeric bounds from the shared schema, writes `config.json`, and prints PowerShell/bash env-lines. |
 | `wd export-config` | off | — | Rust-native effective-config export (`config.json` + environment precedence) as a JSON blob plus correctly quoted PowerShell/bash lines. All supported credential environment variables are collected; credential-store lookup is limited to active cloud STT/post providers, so saved credentials for inactive providers are not enumerated. Values are redacted by default. |
 | `--include-secrets` | off | — | With `wd export-config`, emit every collected API key in full instead of `***`, including supported environment keys for inactive providers. |
-| `wd model-capacity` | off | — | Show NVIDIA GPU free/total VRAM and a local model fit table from the Rust controller before loading a model. |
-| `wd transcribe-file PATH [--json]` | text | 16 kHz mono WAV | Rust-native one-shot transcription in distributions that ship the Rust controller. Configured cloud STT works in every Rust-controller build; local STT requires `whisper-rs-local`, included by the canonical `shipping` profile used for releases, Nix and the Linux source installer, but not by a default `cargo run`. Applies the configured language, bounded prompt/dictionary terms, replacements, and post-processing; never falls back to another engine. MP3/M4A/stereo/other sample rates are rejected with an actionable `ffmpeg -i INPUT -ac 1 -ar 16000 OUTPUT.wav` conversion hint. |
+| `wd model-capacity` | off | — | Show Vulkan memory and model fit estimates for Whisper. Ollama estimates use the separately reported NVIDIA memory. |
+| `wd transcribe-file PATH [--json]` | text | 16 kHz mono WAV | Rust-native one-shot transcription. Configured hosted STT works in every Rust-controller build; local Whisper requires a Vulkan-capable binary (`whisper-rs-vulkan`) and a suitable GPU. Applies the configured language, bounded prompt/dictionary terms, replacements, and post-processing; never falls back to another engine. MP3/M4A/stereo/other sample rates are rejected with an actionable `ffmpeg -i INPUT -ac 1 -ar 16000 OUTPUT.wav` conversion hint. |
 | `wd bench` | off | — | Run the golden benchmark corpus (`benchmark/corpus.json`) through the configured backend via the native Rust runner and print per-item JSONL plus one `[benchmark]` summary line. Same code path as the System tab's "Run benchmark" button. |
 | `--benchmark-corpus PATH` | off | manifest path | Corpus manifest path used by `--dictionary-build-from-corpus` (forwarded to the Rust `dictionary build-from-corpus` subcommand). |
 | `wd calibrate-mic [SECONDS] [--device NAME] [--json]` | off | seconds, default `5` | Bounded microphone calibration using the configured device unless overridden. Prints pass/warn/fail audio diagnostics and recommended threshold settings. Requires a shipping build with `audio-capture`. |
@@ -976,8 +973,11 @@ Or make your **own** shortcut whose Target is
 
 ### Optional external API backends
 
-External providers are explicit opt-in and are not used by default. For
-OpenAI-compatible transcription, set an API key and switch the STT backend:
+External providers are explicit opt-in. If your hardware cannot run a local
+model, choose a hosted provider that supports your language. A recommendation
+does not change your settings or send any audio. `VOICEPI_LOCAL_ONLY=1`
+continues to block incompatible remote routes. For OpenAI-compatible
+transcription, set an API key and switch the STT backend:
 
 ```powershell
 setx OPENAI_API_KEY "sk-..."
@@ -985,7 +985,7 @@ setx VOICEPI_STT_BACKEND openai
 setx VOICEPI_STT_MODEL gpt-4o-mini-transcribe
 ```
 
-For Groq cloud transcription, use the Rust UI Core tab: set
+For Groq cloud transcription, use the Rust UI Speech tab: set
 `STT backend = openai`, set `Cloud STT provider = groq`, enter the API key, and
 click **Save API key**. The key is stored in the OS credential store when
 available and may also use the documented `api-keys.json` fallback, but it is
@@ -1015,13 +1015,13 @@ Nemotron has two different credentials, depending on where the model runs:
 
 For a fully local, in-process deployment (no Docker, NIM server, API key, or
 network request after first-run setup), choose the Nemotron provider and the
-**Multilingual / Auto** profile in the Speech tab. Selecting that profile sets
-`inproc://nemotron`; the app downloads the
+**Multilingual / Auto** profile in the Speech tab if your system has a
+supported GPU. That profile sets `inproc://nemotron`; the app downloads the
 official [NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) runtime
-and the pinned multilingual GGUF into the per-user cache, verifies both with
-SHA-256, and starts without manual file copying. The **Local Nemotron model**
-field remains editable after selecting this profile;
-enter an existing absolute `.gguf` path there to use a developer-managed model.
+and the pinned multilingual GGUF into the per-user cache and verifies both
+with SHA-256. The **Local Nemotron model** field remains editable after
+selecting this profile; enter an existing absolute `.gguf` path there to use
+a developer-managed model.
 The equivalent explicit
 configuration is:
 
@@ -1035,12 +1035,12 @@ wd config set stt_backend openai
 
 The Speech tab labels this as **Local Nemotron model**. `Language=Auto` is sent
 as the explicit multilingual `auto` hint, while `da`, `en`, `de`, and the other
-compact values are expanded to the regional Nemotron locale. Existing absolute
-`.gguf` paths and `VOICEPI_NEMOTRON_LIBRARY` remain supported for offline or
-developer installs. **Test local model** performs a local recognizer load check
-in this mode and does not look for an API key. Set `local_only=true` before
-first use only when the model/runtime have already been installed locally;
-the privacy lock intentionally prevents the automatic downloads.
+compact values are expanded to the regional Nemotron locale. An absolute
+`.gguf` path can select a custom model. The runtime must come from the
+verified managed accelerator archive; see [offline setup](STT_BACKENDS.md#in-process-nemotron).
+**Test local model** checks whether the runtime and model load without
+recording or transcribing audio. With `local_only=true`, the model and runtime
+must already be installed locally because automatic downloads are blocked.
 
 For a one-session PowerShell test, keep the NVIDIA key out of persistent
 `setx` values and map it to whisper-dictate's provider-scoped variable:
@@ -1119,8 +1119,8 @@ setx VOICEPI_POST_MODE clean
 
 Use `VOICEPI_STT_BASE_URL` and `VOICEPI_POST_BASE_URL` for compatible endpoints
 that expose `/audio/transcriptions` and `/chat/completions`. `VOICEPI_LOCAL_ONLY=1`
-blocks the external STT backend and external post-processor before any request is
-made.
+blocks non-loopback STT and incompatible external post-processing routes before
+any request is made.
 
 ### Self-host the STT model in a container
 
@@ -1385,42 +1385,42 @@ NixOS module — set env in the service/user environment (e.g.
 it. `VOICEPI_XKB_LAYOUT` is auto-derived from `--lang`/the session layout; the
 module already wires up ydotool/uinput for Wayland.
 
-## GPU VRAM sizing — what to set per card
+## GPU memory sizing for local Whisper
 
-Run `wd model-capacity` to inspect local NVIDIA GPU free/total
-VRAM and get a model-fit table for Whisper and local Ollama post-processing
-models. On Windows, the Settings UI exposes the same check on the Core tab as
-**Model fit**.
+Whisper checks whether a single Vulkan GPU can fit the model. Memory on
+different adapters does not add up. These are estimates, not guarantees:
 
-Pick the row matching your **free** VRAM (run `nvidia-smi --query-gpu=memory.free
---format=csv` — browser/IDE/Discord eat 1–3 GB before whisper-dictate starts,
-so free ≠ total). Round down to the nearest row. If the first transcription
-OOMs, choose a smaller model. Numeric precision and quantisation are properties
-of the downloaded whisper.cpp model file; there are no separate runtime
-precision or beam-size settings.
+| Model | Estimated GPU memory needed |
+|---|---:|
+| Whisper Turbo (`large-v3-turbo`) | 2.75 GiB |
+| Whisper Quality (`large-v3`) | 4.25 GiB |
+| Edda (~3.1 GB GGML file) | 4.25 GiB |
 
-**One-liner to set the 8–12 GB row** (RTX 3080 / 4070):
-
-```powershell
-setx VOICEPI_DEVICE vulkan; setx VOICEPI_MODEL large-v3; setx VOICEPI_LANG da
-# restart whisper-dictate; the first [whisper] line reports the resolved accelerator
-```
+Other custom GGML files are estimated from their file size. The Speech tab
+uses the GPU's total memory for model availability. Loading the model also
+requires enough free memory at that moment, so a model that fits in Settings
+can still fail at runtime. If the error says there is not enough free GPU
+memory, close other GPU-heavy apps and retry or select a smaller model. Use
+`wd model-capacity` for the Vulkan memory and model fit reported at that
+moment. Numeric precision and quantization are properties of
+the model file, not separate runtime settings.
 
 ## Native transcription and GPU acceleration
 
-The native runtime runs whisper.cpp inside the Rust binary. GPU support is a
-compile-time feature. `VOICEPI_DEVICE` selects `auto`, `vulkan`, or `cpu`;
-`vulkan` is strict and a CPU-only build rejects it with an actionable
-capability error. `VOICEPI_WHISPER_GPU` selects `auto`, `vulkan`, or `off` and
-is a best-effort policy: on a CPU-only build, `vulkan` remains usable by
-falling back to CPU. The diagnostic log records the resolved accelerator.
+Local Whisper runs whisper.cpp inside the Rust binary and needs a build with
+`whisper-rs-vulkan` and a usable Vulkan adapter. Set `VOICEPI_DEVICE=vulkan`
+to request it explicitly, or use `auto`. A CPU-only build or unsuitable GPU
+produces an error rather than a CPU fallback. CPU is not an option for local
+inference in Speech settings. Change a legacy `device: "cpu"` setting to a
+supported GPU device or explicitly configure an external provider. In-process
+Nemotron also requires a supported GPU.
 
 ## Quick recommendations
 
 - **Daily Danish dictation:** `VOICEPI_LANG=da` (persistent). Add
   `VOICEPI_INITIAL_PROMPT` with your domain terms.
-- **GPU desktop, max quality:** see the VRAM sizing table above — pick the row
-  matching your free VRAM, not your total.
+- **GPU desktop, max quality:** choose the largest model that fits your
+  available GPU memory; see [the estimates above](#gpu-memory-sizing-for-local-whisper).
 - **Multilingual:** leave `VOICEPI_LANG` unset (auto-detect) — but speak full,
   clear sentences; auto-detect is unreliable on short utterances.
 - **Mic too quiet / noisy:** see [MICROPHONE.md](MICROPHONE.md) before tuning
@@ -1438,8 +1438,7 @@ model, language, and microphone levels:
 
 Model/engine notes for fast speech:
 
-- With Vulkan GPU acceleration prefer `VOICEPI_MODEL=large-v3` over `large-v3-turbo` — the full
-  model is more robust to fast, slurred or accented speech (turbo trades a little
-  accuracy for speed). On CPU, `large-v3-turbo` is the practical default.
+- If your GPU can fit `large-v3`, prefer it over `large-v3-turbo` for fast,
+  slurred, or accented speech. Turbo trades some accuracy for speed.
 - `VOICEPI_LANG=<your language>` (not auto-detect) — language detection is
   weaker on the short, run-together clips fast speech produces.

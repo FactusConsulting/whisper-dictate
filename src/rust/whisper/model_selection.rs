@@ -29,7 +29,10 @@ where
         return Ok(Some(entry));
     }
 
-    Ok(CATALOG.iter().find(|entry| is_downloaded(entry)))
+    Ok(CATALOG
+        .iter()
+        .filter(|entry| entry.fixed_language.is_none())
+        .find(|entry| is_downloaded(entry)))
 }
 
 #[cfg(test)]

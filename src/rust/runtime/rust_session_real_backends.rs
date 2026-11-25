@@ -50,7 +50,7 @@ use crate::dictate::{
 use crate::runtime::{RepaintNotifier, RuntimeEvent};
 
 use super::rust_session_preview::runtime_channel_preview_sink;
-use crate::whisper::{resolve_model_path, IdleUnloadingModel};
+use crate::whisper::{resolve_model, IdleUnloadingModel};
 
 use super::rust_session_inject::ProductionInjectBackend;
 use super::settings_snapshot::RuntimeSettingsSnapshot;
@@ -243,14 +243,9 @@ fn parse_command_hook_timeout(raw: Option<&str>) -> u64 {
 ///
 /// Both halves come from the built backend, never from env:
 ///
-/// * **Local** -- `whisper.cpp` plus the process-wide accelerator verdict.
-///   At startup that is still the PLAN (env GPU policy + compiled-in
-///   backend), because whisper.cpp loads its model lazily on the first
-///   utterance and has not yet had a chance to disagree. The
-///   authoritative per-load verdict is logged by
-///   `crate::whisper::local::LocalWhisper` (`[whisper] model loaded: ...
-///   accel=...`) and stamped on every utterance record as `stt_accel`;
-///   when the two disagree, the utterance record tells the truth.
+/// * **Local** -- `whisper.cpp` plus the Vulkan plan. The model loads
+///   lazily, and each inference state must confirm Vulkan initialization
+///   before decoding.
 /// * **Cloud** -- the provider sniffed from the live base URL, and
 ///   `unknown` for the accelerator. The local whisper.cpp GPU plan says
 ///   nothing about a remote provider's compute path, and reporting it
@@ -269,9 +264,9 @@ fn startup_provenance_for(
             (cloud.stt_impl(), crate::whisper::Accel::Unknown.as_str())
         }
         #[cfg(feature = "nemotron-local")]
-        ProductionTranscribeBackend::NemotronLocal(backend) => (
+        ProductionTranscribeBackend::NemotronLocal(_) => (
             crate::dictate::provenance::STT_IMPL_NEMOTRON_LOCAL,
-            backend.config().accel_label,
+            crate::whisper::Accel::Unknown.as_str(),
         ),
     }
 }
@@ -346,7 +341,7 @@ fn preview_seconds_with(lookup: &impl Fn(&str) -> Option<String>) -> f64 {
 ///   [`CloudTranscribeConfig::from_env_with_provider`]; the model-path /
 ///   idle-timeout resolution below is SKIPPED on that path (cloud STT
 ///   needs no local model). Any other value keeps local Whisper.
-/// - Model path (local only): [`resolve_model_path`] -- same
+/// - Model selection (local only): [`resolve_model`] -- same
 ///   env-var / user-cache lookup the dispatcher and long-running server
 ///   use, so the contract is identical whether the user is on the
 ///   subprocess-per-utterance path, the long-running line server, or
@@ -399,7 +394,7 @@ pub(crate) fn make_real_session_with_activity_and_settings(
         // Transcribe seam: `openai` selects the cloud
         // `/audio/transcriptions` endpoint (openai OR Groq, by base URL) and
         // needs NO local model -- `ProductionTranscribeBackend::select`
-        // runs the local thunk (and thus `resolve_model_path_from_env`)
+        // runs the local thunk (and thus `resolve_model`)
         // ONLY on the local path, which is the whole point of cloud STT
         // (a user with no GGML model installed can still dictate). Any
         // other `VOICEPI_STT_BACKEND` value (incl. unset) keeps local
@@ -488,7 +483,7 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                     })
                 },
                 || -> Result<WhisperLocalTranscribeBackend, String> {
-                    let model_path = resolve_model_path(
+                    let selection = resolve_model(
                         runtime.value(crate::whisper::MODEL_PATH_ENV),
                         Some(&settings.model),
                     )
@@ -504,8 +499,16 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                         Some(&settings.device),
                     )
                     .map_err(|e| format!("GPU policy: {e:#}"))?;
+                    crate::whisper::LocalWhisper::check_gpu_capacity(&selection, gpu_policy)
+                        .map_err(|e| format!("Whisper GPU capacity: {e:#}"))?;
+                    crate::whisper::accel::global().begin_model_load(crate::whisper::Accel::Vulkan);
+                    let no_timestamps =
+                        crate::privacy::truthy(runtime.value(crate::whisper::NO_TIMESTAMPS_ENV));
                     let model = IdleUnloadingModel::for_local_whisper_with_policy(
-                        model_path, idle, gpu_policy,
+                        selection,
+                        idle,
+                        gpu_policy,
+                        no_timestamps,
                     );
                     let config = whisper_backend_config_with(&lookup);
                     Ok(WhisperLocalTranscribeBackend::new(model, config)

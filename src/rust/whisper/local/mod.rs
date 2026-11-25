@@ -25,11 +25,8 @@
 //!   `load_catch_unwind` wrapper for reporting whisper.cpp load failures.
 //! - [`preload`] — background load primitive (`Preloader`, `LoadStatus`) used
 //!   by the `whisper-load` self-test and other explicit diagnostic callers.
-//! - [`log_tap`] — installs a whisper.cpp log callback so the
-//!   `whisper_backend_init_gpu: ...` model-load lines become a
-//!   machine-readable [`super::accel::Accel`] verdict instead of stderr
-//!   text nobody can act on. This is what makes a silent GPU->CPU
-//!   fallback visible on every utterance record.
+//! - [`log_tap`] — captures model placement and GPU state initialization
+//!   directly from whisper.cpp; production inference fails closed.
 
 mod log_tap;
 pub mod preload;
@@ -52,8 +49,12 @@ use whisper_rs::{
     get_lang_str, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
 };
 
-use super::accel;
+use crate::model_capacity::{select_whisper_gpu, whisper_gpus, whisper_required_mib};
+
+use super::dispatch::ResolvedModel;
 use super::gpu::{self, GpuPolicy};
+use super::model_manager::ModelEntry;
+use super::{accel, NO_TIMESTAMPS_ENV};
 
 /// Failure envelope returned by [`LocalWhisper::load_catch_unwind`].
 ///
@@ -128,40 +129,124 @@ impl std::fmt::Display for LoadFailure {
 /// concurrent inference yet).
 pub struct LocalWhisper {
     ctx: WhisperContext,
+    // None is reserved for the load-only diagnostic.
+    vulkan: Option<VulkanModel>,
+    entry: Option<&'static ModelEntry>,
+    no_timestamps: bool,
+}
+
+struct VulkanModel {
+    index: i32,
+    required_mib: u32,
+    resident_mib: u32,
+}
+
+fn required_gpu_mib(model_path: &Path, entry: Option<&ModelEntry>) -> Result<u32> {
+    if let Some(required_mib) = entry.and_then(|entry| entry.estimated_gpu_mib) {
+        return Ok(required_mib);
+    }
+    let bytes = std::fs::metadata(model_path)
+        .with_context(|| format!("cannot read Whisper model size: {}", model_path.display()))?
+        .len();
+    Ok(whisper_required_mib(bytes))
+}
+
+fn select_model_gpu(
+    model_path: &Path,
+    entry: Option<&ModelEntry>,
+    policy: GpuPolicy,
+) -> Result<(i32, u32)> {
+    if policy == GpuPolicy::Off {
+        anyhow::bail!("local Whisper requires a Vulkan GPU; CPU inference is disabled (set VOICEPI_WHISPER_GPU=auto or select a hosted STT provider)");
+    }
+    if !cfg!(feature = "whisper-rs-vulkan") {
+        anyhow::bail!("local Whisper requires Vulkan support; rebuild with --features whisper-rs-vulkan or select a hosted STT provider");
+    }
+    let required_mib = required_gpu_mib(model_path, entry)?;
+    let gpus = whisper_gpus();
+    if gpus.is_empty() {
+        anyhow::bail!("local Whisper requires a usable Vulkan GPU with reported memory capacity; check the GPU and driver or select a hosted STT provider");
+    }
+    let index = select_whisper_gpu(&gpus, required_mib).ok_or_else(|| {
+        anyhow!("local Whisper requires {required_mib} MiB of available memory on one Vulkan GPU; free GPU memory, choose a smaller model, or select a hosted STT provider")
+    })?;
+    Ok((index, required_mib))
+}
+
+impl VulkanModel {
+    fn check_state_capacity(&self) -> Result<()> {
+        let additional_mib = self.required_mib.saturating_sub(self.resident_mib);
+        let gpus = whisper_gpus();
+        let gpu = gpus.iter().find(|gpu| gpu.index == self.index).ok_or_else(|| {
+            anyhow!("local Whisper cannot find its loaded Vulkan GPU {} with reported memory capacity", self.index)
+        })?;
+        if gpu.total_mib < self.required_mib || gpu.free_mib < additional_mib {
+            anyhow::bail!(
+                "local Whisper requires {additional_mib} MiB free on Vulkan GPU {} for inference state; {} MiB available",
+                self.index,
+                gpu.free_mib
+            );
+        }
+        Ok(())
+    }
+}
+
+fn no_timestamps_from_env() -> bool {
+    crate::privacy::truthy(std::env::var(NO_TIMESTAMPS_ENV).ok().as_deref())
+}
+
+fn decode_without_timestamps(entry: Option<&ModelEntry>, requested: bool) -> bool {
+    requested || entry.is_some_and(|entry| entry.no_timestamps)
 }
 
 impl LocalWhisper {
-    /// Load a GGML whisper.cpp model from disk, picking GPU vs CPU according
-    /// to `VOICEPI_WHISPER_GPU` (see [`super::gpu::GPU_ENV`]).
+    /// Load a GGML model, taking GPU policy from [`super::gpu::GPU_ENV`].
+    /// `VOICEPI_WHISPER_NO_TIMESTAMPS` opts in to disabling timestamp
+    /// generation for models trained without it.
     ///
-    /// `model_path` should point to a file such as `ggml-small.en.bin` from
-    /// the [ggerganov/whisper.cpp releases]. The effective `use_gpu` is the
-    /// product of three things: the env-var policy, the compiled-in backend
-    /// feature (`whisper-rs-vulkan`), and the resolution
-    /// rules in [`super::gpu::should_use_gpu`].
-    ///
-    /// For deterministic tests use [`Self::with_policy`] which takes the
-    /// policy explicitly instead of reading the env.
+    /// Use [`Self::with_policy`] to pass both settings explicitly.
     ///
     /// **Only GGML is supported.** whisper.cpp has not yet picked up
     /// llama.cpp's GGUF container, so a GGUF file is rejected up front by a
     /// magic-bytes check rather than failing with a cryptic FFI error.
-    ///
-    /// [ggerganov/whisper.cpp releases]: https://huggingface.co/ggerganov/whisper.cpp
     pub fn new(model_path: &Path) -> Result<Self> {
         let policy = gpu::parse_gpu_policy_from_env()?;
-        Self::with_policy(model_path, policy)
+        Self::with_policy(model_path, policy, no_timestamps_from_env())
     }
 
-    /// Load a GGML whisper.cpp model with an explicit [`GpuPolicy`].
+    /// Load a GGML model with an explicit GPU policy and timestamp decode mode.
     ///
-    /// Bypasses the env-var read in [`Self::new`] so tests and callers that
-    /// already know the desired policy can pin it. The same compiled-in
-    /// feature gate from [`super::gpu::should_use_gpu`] still applies, so a
-    /// `Vulkan` policy on a build without `whisper-rs-vulkan` silently falls
-    /// back to CPU rather than erroring (matching the runtime "best effort"
-    /// promise of the env-var path).
-    pub fn with_policy(model_path: &Path, policy: GpuPolicy) -> Result<Self> {
+    /// Bypasses the environment reads in [`Self::new`]. A usable Vulkan GPU
+    /// with enough available memory for this model is required.
+    pub fn with_policy(model_path: &Path, policy: GpuPolicy, no_timestamps: bool) -> Result<Self> {
+        Self::load(model_path, None, Some(policy), no_timestamps)
+    }
+
+    pub(crate) fn from_resolved(model: &ResolvedModel) -> Result<Self> {
+        let policy = gpu::parse_gpu_policy_from_env()?;
+        Self::from_resolved_with_policy(model, policy, no_timestamps_from_env())
+    }
+
+    pub(crate) fn from_resolved_with_policy(
+        model: &ResolvedModel,
+        policy: GpuPolicy,
+        no_timestamps: bool,
+    ) -> Result<Self> {
+        Self::load(&model.path, model.entry, Some(policy), no_timestamps)
+    }
+
+    /// Check local Whisper hardware before constructing the recording session.
+    #[cfg(native_session)]
+    pub(crate) fn check_gpu_capacity(model: &ResolvedModel, policy: GpuPolicy) -> Result<()> {
+        select_model_gpu(&model.path, model.entry, policy).map(|_| ())
+    }
+
+    fn load(
+        model_path: &Path,
+        entry: Option<&'static ModelEntry>,
+        policy: Option<GpuPolicy>,
+        no_timestamps: bool,
+    ) -> Result<Self> {
         if !model_path.is_file() {
             return Err(anyhow!(
                 "whisper model file not found: {}",
@@ -182,42 +267,45 @@ impl LocalWhisper {
             )
         })?;
 
-        let use_gpu = gpu::should_use_gpu(policy);
+        let selection = policy
+            .map(|policy| select_model_gpu(model_path, entry, policy))
+            .transpose()?;
         let params = WhisperContextParameters {
-            use_gpu,
+            use_gpu: selection.is_some(),
+            gpu_device: selection.map_or(0, |(index, _)| index),
             ..Default::default()
         };
-
-        // Forget the PREVIOUS load's verdict, record what we EXPECT from
-        // this one, then tap whisper.cpp's own log so what actually
-        // happens can overrule it. All three must happen BEFORE
-        // `new_with_params`: the backend-selection lines are emitted
-        // inside that call and a callback installed afterwards would
-        // miss the only evidence there is that a Vulkan-linked binary
-        // fell back to CPU.
-        //
-        // `begin_model_load` (rather than `set_planned` alone) is what
-        // makes an idle-unload + reload that LOSES the GPU visible: the
-        // rank ratchet inside `record` would otherwise keep the first
-        // load's `vulkan` forever.
-        let observer = accel::global();
-        observer.begin_model_load(accel::planned_from_policy(policy));
-        log_tap::install();
-
-        let ctx = WhisperContext::new_with_params(model_str, params).with_context(|| {
-            format!("failed to load whisper model from {}", model_path.display())
-        })?;
-        // One line per successful load naming the compute path whisper.cpp
-        // actually took. Emitted here (not at startup) because this is the
-        // first moment the answer exists -- the model loads lazily on the
-        // first utterance, long after the startup banner.
-        crate::diag::log!(
-            "[whisper] model loaded: requested_gpu={} accel={} (planned={})",
-            use_gpu,
-            observer.resolved().as_str(),
-            observer.planned().as_str()
-        );
-        Ok(Self { ctx })
+        let load_context = || {
+            WhisperContext::new_with_params(model_str, params).with_context(|| {
+                format!("failed to load whisper model from {}", model_path.display())
+            })
+        };
+        let (ctx, vulkan) = if let Some((index, required_mib)) = selection {
+            accel::global().begin_model_load(accel::Accel::Vulkan);
+            // The no-state constructor places weights; it does not initialize
+            // the GPU backend used for decoding.
+            let (ctx, evidence) = log_tap::observe(index, load_context);
+            let ctx = ctx?;
+            if evidence.resident_mib == 0 {
+                anyhow::bail!("local Whisper could not verify model weights on Vulkan GPU {index}; CPU inference is disabled");
+            }
+            crate::diag::log!("[whisper] model weights loaded on Vulkan GPU {index}");
+            let vulkan = VulkanModel {
+                index,
+                required_mib,
+                resident_mib: evidence.resident_mib,
+            };
+            (ctx, Some(vulkan))
+        } else {
+            log_tap::install();
+            (load_context()?, None)
+        };
+        Ok(Self {
+            ctx,
+            entry,
+            no_timestamps: decode_without_timestamps(entry, no_timestamps),
+            vulkan,
+        })
     }
 
     /// Load a GGML whisper.cpp model with a caught unwind around the
@@ -233,17 +321,11 @@ impl LocalWhisper {
     /// `anyhow` context. Panic messages are stringified via the standard
     /// `Any::downcast_ref::<&str>()` / `<String>()` dance so the caller
     /// gets *something* readable even for exotic panic payloads.
+    ///
+    /// This diagnostic loads weights on CPU without creating an inference
+    /// state. The returned object cannot transcribe.
     pub fn load_catch_unwind(model_path: &Path) -> Result<Self, LoadFailure> {
-        let path = model_path.to_path_buf();
-        // AssertUnwindSafe is safe here: LocalWhisper::new does not
-        // capture any shared mutable state — it takes an owned path and
-        // produces a fresh WhisperContext. Even if whisper.cpp leaves
-        // static/global state in an inconsistent shape after a caught
-        // panic (unlikely for a load-time OOM), we treat the resulting
-        // process as "must not use whisper-rs again this session"
-        // the caller surfaces the native failure with diagnostics.
-        let result =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || Self::new(&path)));
+        let result = std::panic::catch_unwind(|| Self::load(model_path, None, None, false));
         match result {
             Ok(Ok(model)) => Ok(model),
             Ok(Err(err)) => Err(LoadFailure::errored(err)),
@@ -336,14 +418,31 @@ impl LocalWhisper {
         initial_prompt: Option<&str>,
         abort: Option<&AtomicBool>,
     ) -> Result<(String, Option<String>)> {
+        let vulkan = self
+            .vulkan
+            .as_ref()
+            .context("diagnostic Whisper model is load-only; CPU inference is disabled")?;
         if samples.is_empty() {
             return Err(anyhow!("cannot transcribe an empty audio buffer"));
         }
 
-        let mut state = self
-            .ctx
-            .create_state()
-            .context("failed to create whisper state")?;
+        let observer = accel::global();
+        observer.begin_model_load(accel::Accel::Unknown);
+        vulkan.check_state_capacity()?;
+        let (state, evidence) = log_tap::observe(vulkan.index, || self.ctx.create_state());
+        match evidence.state {
+            log_tap::GpuState::Failed => anyhow::bail!(
+                "local Whisper failed to initialize Vulkan GPU {}; CPU inference is disabled",
+                vulkan.index
+            ),
+            log_tap::GpuState::Unknown => anyhow::bail!(
+                "local Whisper could not verify inference state on Vulkan GPU {}; CPU inference is disabled",
+                vulkan.index
+            ),
+            log_tap::GpuState::Vulkan => {}
+        }
+        let mut state = state.context("failed to create Vulkan Whisper inference state")?;
+        observer.record(accel::Accel::Vulkan);
 
         let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
         // Keep the spike output minimal: no progress / realtime / timestamp
@@ -353,15 +452,14 @@ impl LocalWhisper {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
+        params.set_no_timestamps(self.no_timestamps);
         // Translation is an opt-in Whisper task. Pin transcription even when
         // auto-detection is enabled, so the output stays in the spoken language.
         params.set_translate(false);
 
-        // Language hint: whisper-rs defaults to "en", which silently mis-
-        // transcribes non-English audio on multilingual models. Pass the
-        // caller's choice through; `None` and `Some("auto")` both mean
-        // "auto-detect" per whisper.cpp's convention.
-        let lang_for_whisper = normalize_language_hint(language);
+        // Presets with a fixed language override the caller's hint. Otherwise,
+        // pass a null hint for Auto so whisper.cpp detects and transcribes.
+        let lang_for_whisper = normalize_language_hint(self.entry, language);
         params.set_language(lang_for_whisper);
         // `language=None` already enables auto-detection in whisper.cpp and
         // then continues into transcription. Do not set
@@ -428,8 +526,11 @@ unsafe extern "C" fn abort_requested(user_data: *mut c_void) -> bool {
 /// at the local-backend boundary. Keeping the small helper here makes the
 /// whisper.cpp call self-contained and protects direct callers from bypassing
 /// protocol normalization.
-fn normalize_language_hint(language: Option<&str>) -> Option<&str> {
-    match language {
+fn normalize_language_hint<'a>(
+    entry: Option<&ModelEntry>,
+    language: Option<&'a str>,
+) -> Option<&'a str> {
+    match entry.and_then(|entry| entry.fixed_language).or(language) {
         None => None,
         Some(value) if value.is_empty() || value.eq_ignore_ascii_case("auto") => None,
         Some(other) => Some(other),

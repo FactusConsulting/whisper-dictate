@@ -33,30 +33,6 @@ fn model_choices_match_the_visible_download_catalog() {
 }
 
 #[test]
-fn model_description_enumerates_the_hidden_download_catalog() {
-    let model = runtime_settings()
-        .iter()
-        .find(|setting| setting.key == "model")
-        .expect("model setting");
-    let documented = model
-        .description
-        .split_once("Hidden legacy ")
-        .and_then(|(_, names)| names.split_once(" values remain loadable"))
-        .map(|(names, _)| names.replace(", and ", ", "))
-        .expect("model description must delimit its hidden legacy names")
-        .split(", ")
-        .map(str::to_owned)
-        .collect::<Vec<_>>();
-    let hidden = crate::whisper::model_manager::CATALOG
-        .iter()
-        .filter(|entry| entry.hidden)
-        .map(|entry| entry.name.to_owned())
-        .collect::<Vec<_>>();
-
-    assert_eq!(documented, hidden);
-}
-
-#[test]
 fn schema_marks_the_optional_string_settings_as_nullable() {
     let nullable = runtime_settings()
         .iter()

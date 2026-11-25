@@ -3,7 +3,7 @@
 use super::*;
 
 impl WhisperDictateApp {
-    pub(super) fn poll_runtime(&mut self) {
+    pub(in crate::ui) fn poll_runtime(&mut self) {
         self.refresh_hotkey_conflict();
         for event in self.supervisor.poll() {
             match event {
@@ -42,9 +42,19 @@ impl WhisperDictateApp {
             }
         }
         // Poll the background GPU probe and adopt the result once available.
-        if let Some(result) = self.gpu_probe.as_ref().and_then(|rx| rx.try_recv().ok()) {
-            self.gpu_total_mb = result;
-            self.gpu_probe = None;
+        if let Some(result) = self.gpu_probe.as_ref().map(Receiver::try_recv) {
+            let totals = match result {
+                Ok(totals) => Some(totals),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Some(SpeechGpuTotals::default())
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            };
+            if let Some(totals) = totals {
+                self.gpu_total_mb = totals.whisper_mib;
+                self.nemotron_gpu_total_mib = totals.nemotron_mib;
+                self.gpu_probe = None;
+            }
         }
         self.runtime_state = self.supervisor.state();
     }

@@ -43,12 +43,54 @@ fn auto_language_hint_uses_whisper_transcription_mode() {
     // decoding. The separate `detect_language` parameter is detection-only;
     // the production path must not turn Auto into a language probe that
     // returns an empty segment list.
-    assert_eq!(normalize_language_hint(None), None);
-    assert_eq!(normalize_language_hint(Some("")), None);
-    assert_eq!(normalize_language_hint(Some("auto")), None);
-    assert_eq!(normalize_language_hint(Some("Auto")), None);
-    assert_eq!(normalize_language_hint(Some("AUTO")), None);
-    assert_eq!(normalize_language_hint(Some("en")), Some("en"));
+    assert_eq!(normalize_language_hint(None, None), None);
+    assert_eq!(normalize_language_hint(None, Some("")), None);
+    assert_eq!(normalize_language_hint(None, Some("auto")), None);
+    assert_eq!(normalize_language_hint(None, Some("Auto")), None);
+    assert_eq!(normalize_language_hint(None, Some("AUTO")), None);
+    assert_eq!(normalize_language_hint(None, Some("en")), Some("en"));
+}
+
+#[test]
+fn edda_decode_overrides_language_and_timestamps_but_explicit_paths_do_not() {
+    use crate::whisper::{dispatch::resolve_model, model_manager};
+
+    let english = whisper_rs::get_lang_id("en").expect("English language ID");
+    let stock = model_manager::find("large-v3").unwrap();
+    for (name, required_mib) in [("edda-v0.2", 2816), ("edda-v0.2-large", 4352)] {
+        let entry = model_manager::find(name).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(entry.filename);
+        std::fs::write(&path, b"fixture").unwrap();
+
+        assert_eq!(required_gpu_mib(&path, Some(entry)).unwrap(), required_mib);
+        assert!(decode_without_timestamps(Some(entry), false));
+        for hint in [None, Some("Auto"), Some("en")] {
+            let language = normalize_language_hint(Some(entry), hint);
+            assert_eq!(language, Some("da"));
+            assert_eq!(resolved_language(language, english).as_deref(), Some("da"));
+        }
+
+        let path_str = path.to_str().unwrap();
+        let unmanaged = resolve_model(Some(path_str), Some(name)).unwrap();
+        let unmanaged_by_id = resolve_model(Some(name), Some(name)).unwrap();
+        for (model, override_path) in [(&unmanaged, path_str), (&unmanaged_by_id, name)] {
+            assert_eq!(model.path.as_path(), Path::new(override_path));
+            assert!(model.entry.is_none());
+            assert_eq!(normalize_language_hint(model.entry, Some("Auto")), None);
+            assert_eq!(normalize_language_hint(model.entry, Some("en")), Some("en"));
+            assert!(!decode_without_timestamps(model.entry, false));
+            assert!(decode_without_timestamps(model.entry, true));
+        }
+        let file_estimate = whisper_required_mib(b"fixture".len() as u64);
+        assert_eq!(
+            required_gpu_mib(&unmanaged.path, unmanaged.entry).unwrap(),
+            file_estimate
+        );
+        assert_eq!(required_gpu_mib(&path, Some(stock)).unwrap(), file_estimate);
+    }
+    assert_eq!(normalize_language_hint(Some(stock), Some("en")), Some("en"));
+    assert!(!decode_without_timestamps(Some(stock), false));
 }
 
 #[test]
@@ -144,6 +186,57 @@ fn auto_language_transcribes_known_speech_when_model_available() {
         .expect("transcribe");
     assert!(!text.trim().is_empty(), "auto transcript was empty");
     assert!(language.is_some(), "auto language was not reported");
+}
+
+#[test]
+fn production_load_refuses_cpu_policy_before_native_load() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("model.bin");
+    std::fs::write(&path, b"ggml").unwrap();
+    let err = unwrap_err(LocalWhisper::with_policy(&path, GpuPolicy::Off, false));
+    assert!(
+        err.to_string().contains("CPU inference is disabled"),
+        "{err}"
+    );
+}
+
+#[cfg(not(feature = "whisper-rs-vulkan"))]
+#[test]
+fn production_load_requires_a_vulkan_build() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("model.bin");
+    std::fs::write(&path, b"ggml").unwrap();
+    for policy in [GpuPolicy::Auto, GpuPolicy::Vulkan] {
+        let err = unwrap_err(LocalWhisper::with_policy(&path, policy, false));
+        assert!(err.to_string().contains("requires Vulkan support"), "{err}");
+    }
+}
+
+/// Give the exact Edda Turbo F16 GGML (`ggml-edda-v0.2-f16.bin`) and
+/// Danish FLEURS test clip 1839 (`da-fleurs-1839.wav`, 16 kHz mono PCM)
+/// via `WHISPER_TEST_EDDA_MODEL_PATH` and `WHISPER_TEST_EDDA_WAV_PATH`.
+///
+/// From the repository root:
+/// `cargo test --manifest-path src/rust/Cargo.toml --lib --features whisper-rs-vulkan edda_turbo_decodes_danish_without_timestamps -- --ignored`
+#[cfg(feature = "whisper-rs-vulkan")]
+#[test]
+#[ignore = "requires Vulkan, the exact Edda Turbo GGML, and the Danish FLEURS WAV"]
+fn edda_turbo_decodes_danish_without_timestamps() {
+    let model = env::var_os("WHISPER_TEST_EDDA_MODEL_PATH")
+        .expect("set WHISPER_TEST_EDDA_MODEL_PATH to the Edda Turbo F16 GGML");
+    let wav = env::var_os("WHISPER_TEST_EDDA_WAV_PATH")
+        .expect("set WHISPER_TEST_EDDA_WAV_PATH to Danish FLEURS test clip 1839");
+
+    let whisper = LocalWhisper::with_policy(Path::new(&model), GpuPolicy::Vulkan, true)
+        .expect("load Edda Turbo on Vulkan");
+    let text = whisper
+        .transcribe_wav(Path::new(&wav), Some("da"), None)
+        .expect("transcribe Danish clip");
+    // Timestamp decoding previously produced unrelated foreign-language tokens.
+    assert!(
+        text.contains("Du skal se skiruten") && text.contains("en lignende vandrerute"),
+        "expected the Danish sentence, got {text:?}"
+    );
 }
 
 #[test]

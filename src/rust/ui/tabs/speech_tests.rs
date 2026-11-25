@@ -1,16 +1,17 @@
 use crate::runtime::RuntimeState;
 use crate::ui::{
     test_support::test_app, AppSettings, HotkeyCaptureState, HotkeyVerificationSession,
-    NEMOTRON_ENGLISH_STT_MODEL, NEMOTRON_HOSTED_STT_BASE_URL, NEMOTRON_IN_PROCESS_STT_BASE_URL,
-    NEMOTRON_MULTI_STT_MODEL,
+    NEMOTRON_ENGLISH_STT_MODEL, NEMOTRON_IN_PROCESS_STT_BASE_URL, NEMOTRON_MULTI_STT_MODEL,
 };
 
-use super::speech::{
-    nemotron_local_model_editor_enabled, nemotron_model_edit_requires_normalization,
-};
+use super::speech::nemotron_model_edit_requires_normalization;
 
+#[cfg(all(feature = "nemotron-local", any(windows, target_os = "linux")))]
 #[test]
 fn multilingual_profile_route_keeps_the_custom_gguf_editor_available() {
+    use super::speech::nemotron_local_model_editor_enabled;
+    use crate::ui::NEMOTRON_HOSTED_STT_BASE_URL;
+
     let mut app = test_app(AppSettings {
         stt_backend: "openai".to_owned(),
         stt_provider: "nemotron".to_owned(),
@@ -18,6 +19,7 @@ fn multilingual_profile_route_keeps_the_custom_gguf_editor_available() {
         stt_model: NEMOTRON_MULTI_STT_MODEL.to_owned(),
         ..Default::default()
     });
+    app.nemotron_gpu_total_mib = Some(4096);
 
     app.route_selected_nemotron_profile();
 

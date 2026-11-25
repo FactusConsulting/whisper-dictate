@@ -52,6 +52,7 @@ fn nemotron_model_picker_offers_english_and_multilingual_profiles() {
     assert!(labels[1].1.to_ascii_lowercase().contains("multilingual"));
 }
 
+#[cfg(all(feature = "nemotron-local", any(windows, target_os = "linux")))]
 #[test]
 fn switching_to_nemotron_defaults_to_multilingual_profile() {
     let mut app = test_app(AppSettings {
@@ -60,11 +61,48 @@ fn switching_to_nemotron_defaults_to_multilingual_profile() {
         stt_model: OPENAI_STT_MODEL.to_owned(),
         ..Default::default()
     });
+    app.nemotron_gpu_total_mib = Some(4096);
 
     app.set_cloud_provider(CloudProvider::Nemotron);
 
     assert_eq!(app.settings.stt_model, NEMOTRON_MULTI_STT_MODEL);
     assert_eq!(app.settings.stt_base_url, NEMOTRON_IN_PROCESS_STT_BASE_URL);
+}
+
+#[test]
+fn switching_to_nemotron_without_a_gpu_uses_the_hosted_english_profile() {
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "openai".to_owned(),
+        stt_model: OPENAI_STT_MODEL.to_owned(),
+        lang: "da".to_owned(),
+        ..Default::default()
+    });
+
+    app.set_cloud_provider(CloudProvider::Nemotron);
+
+    assert_eq!(app.settings.stt_base_url, NEMOTRON_HOSTED_STT_BASE_URL);
+    assert_eq!(app.settings.stt_model, NEMOTRON_ENGLISH_STT_MODEL);
+    assert_eq!(app.settings.lang, "en");
+}
+
+#[test]
+fn multilingual_nemotron_without_a_gpu_preserves_its_external_endpoint() {
+    let endpoint = "grpcs://stt.example.com:443";
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "nemotron".to_owned(),
+        stt_base_url: endpoint.to_owned(),
+        stt_model: NEMOTRON_MULTI_STT_MODEL.to_owned(),
+        lang: "da".to_owned(),
+        ..Default::default()
+    });
+
+    app.route_selected_nemotron_profile();
+
+    assert_eq!(app.settings.stt_base_url, endpoint);
+    assert_eq!(app.settings.stt_model, NEMOTRON_MULTI_STT_MODEL);
+    assert_eq!(app.settings.lang, "da");
 }
 
 #[test]
@@ -116,6 +154,7 @@ fn selecting_english_nemotron_profile_makes_language_explicit() {
     assert!(!app.explicit_nullable_clears.contains("lang"));
 }
 
+#[cfg(all(feature = "nemotron-local", any(windows, target_os = "linux")))]
 #[test]
 fn selecting_multilingual_nemotron_profile_routes_to_local_in_process() {
     let mut app = test_app(AppSettings {
@@ -126,6 +165,7 @@ fn selecting_multilingual_nemotron_profile_routes_to_local_in_process() {
         lang: String::new(),
         ..Default::default()
     });
+    app.nemotron_gpu_total_mib = Some(4096);
 
     let message = app
         .route_selected_nemotron_profile()

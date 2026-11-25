@@ -1,8 +1,8 @@
 use super::device_options::{
     any_gpu_backend_compiled, available_device_values, canonicalize_device_value,
     canonicalize_device_value_for_provider, is_device_supported, is_device_supported_for_provider,
-    missing_device_footnote, missing_device_hint, nemotron_cuda_runtime_available,
-    ALL_DEVICE_VALUES, DEVICE_AUTO, DEVICE_CPU, DEVICE_VULKAN,
+    missing_device_hint, nemotron_cuda_runtime_available, ALL_DEVICE_VALUES, DEVICE_AUTO,
+    DEVICE_CPU, DEVICE_VULKAN,
 };
 
 #[test]
@@ -56,10 +56,6 @@ fn cpu_only_build_rejects_vulkan_with_native_rebuild_guidance() {
     assert!(hint.contains("unavailable"));
     assert!(hint.contains("whisper-rs-vulkan"));
     assert!(!hint.to_ascii_lowercase().contains("python"));
-    let footnote = missing_device_footnote();
-    assert!(footnote.contains("vulkan"));
-    assert!(footnote.contains("unavailable"));
-    assert!(!footnote.to_ascii_lowercase().contains("python"));
 }
 
 #[test]
@@ -67,7 +63,6 @@ fn cpu_only_build_rejects_vulkan_with_native_rebuild_guidance() {
 fn gpu_build_accepts_vulkan_without_a_missing_device_hint() {
     assert!(is_device_supported("vulkan"));
     assert!(missing_device_hint("vulkan").is_none());
-    assert_eq!(missing_device_footnote(), "");
 }
 
 #[test]

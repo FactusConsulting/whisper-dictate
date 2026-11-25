@@ -498,19 +498,15 @@ fn build_local_whisper_backend(
 ) -> Result<crate::dictate::backends::WhisperLocalTranscribeBackend, NativeBenchError> {
     use crate::dictate::backends::whisper_local::WhisperBackendConfig;
     use crate::dictate::backends::WhisperLocalTranscribeBackend;
-    use crate::whisper::{parse_idle_timeout_from_env, IdleUnloadingModel};
+    use crate::whisper::{dispatch, parse_idle_timeout_from_env, IdleUnloadingModel};
 
-    // Reach into `whisper::dispatch` directly instead of via the
-    // `crate::whisper` re-export: the crate-level re-export is gated on
-    // BOTH `whisper-rs-local` AND `rust-injection`, so a build with just
-    // `whisper-rs-local` (release smoke leg, some tests) would otherwise
-    // fail to resolve the symbol.
-    let model_path = crate::whisper::dispatch::resolve_model_path_from_env().map_err(|e| {
-        NativeBenchError::Other(anyhow::anyhow!("resolve whisper model path: {e:#}"))
-    })?;
+    let model_path = std::env::var(dispatch::MODEL_PATH_ENV).ok();
+    let model_name = lookup(dispatch::MODEL_NAME_ENV);
+    let model = dispatch::resolve_model(model_path.as_deref(), model_name.as_deref())
+        .map_err(|e| NativeBenchError::Other(anyhow::anyhow!("resolve whisper model: {e:#}")))?;
     let idle = parse_idle_timeout_from_env()
         .map_err(|e| NativeBenchError::Other(anyhow::anyhow!("whisper idle timeout: {e:#}")))?;
-    let model = IdleUnloadingModel::for_local_whisper(model_path, idle);
+    let model = IdleUnloadingModel::for_local_whisper(model, idle);
     let language = lookup("VOICEPI_LANG");
     let mut initial_prompt = lookup("VOICEPI_INITIAL_PROMPT");
     // fold dictionary terms into the local Whisper

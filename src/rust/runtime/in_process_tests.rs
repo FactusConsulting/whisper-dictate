@@ -169,19 +169,15 @@ fn install_error_display_covers_every_variant() {
 }
 
 #[test]
-fn missing_backend_display_names_reason_and_rebuild_features() {
-    let msg =
-        InProcessInstallError::MissingBackend("audio-capture feature not compiled in".to_owned())
-            .to_string();
-    assert!(
-        msg.contains("audio-capture feature not compiled in"),
-        "must surface the underlying reason: {msg}"
-    );
-    assert!(
-        msg.contains("--no-default-features --features shipping"),
-        "must name the canonical native rebuild profile: {msg}"
-    );
-    assert!(!msg.contains("fallback"), "{msg}");
+fn hardware_refusal_is_distinct_from_missing_build_features() {
+    let reason = "local Whisper requires a usable Vulkan GPU";
+    let hardware_error = InProcessInstallError::MissingBackend(reason.to_owned()).to_string();
+    assert!(hardware_error.contains(reason));
+    assert!(!hardware_error.contains("rebuild"));
+    assert!(!hardware_error.contains("fallback"));
+
+    let build_error = InProcessInstallError::FeaturesMissing.to_string();
+    assert!(build_error.contains("--no-default-features --features shipping"));
 }
 
 #[test]

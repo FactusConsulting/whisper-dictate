@@ -68,14 +68,12 @@ pub use idle::{parse_idle_timeout_from_env, IdleUnloadingModel, IDLE_UNLOAD_ENV}
 pub use protocol::{ServerReady, TranscribeRequest, TranscribeResponse};
 pub use wav::{decode_wav_16k_mono, WHISPER_SAMPLE_RATE_HZ};
 
-// Re-export the model-path resolver to the in-process Rust-session
-// sink so the sink applies the same env-var / cache
-// lookup as the subprocess dispatcher. Gated on the SAME feature pair
-// the sink's real-backends module is gated on -- otherwise a
-// `whisper-rs-local`-only build (e.g. CI's release smoke leg) would
-// flag the unused import.
+/// Opt in to decoding without timestamp tokens in local Whisper.
+pub(crate) const NO_TIMESTAMPS_ENV: &str = "VOICEPI_WHISPER_NO_TIMESTAMPS";
+
+// The native session uses the same model resolver as the CLI dispatcher.
 #[cfg(native_session)]
-pub(crate) use dispatch::resolve_model_path;
+pub(crate) use dispatch::resolve_model;
 #[cfg(feature = "whisper-rs-local")]
 pub use dispatch::{handle_transcribe_server, handle_transcribe_wav, MODEL_PATH_ENV};
 #[cfg(feature = "whisper-rs-local")]

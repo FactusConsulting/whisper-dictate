@@ -1,44 +1,7 @@
-//! Tap on whisper.cpp's own log stream, so we can tell whether a GPU
-//! backend ACTUALLY initialised.
-//!
-//! # Why a log tap and not an API call
-//!
-//! whisper.cpp exposes no "which backend did you pick" getter. The one
-//! authoritative signal it emits is a log line at model-load time:
-//!
-//! ```text
-//! whisper_backend_init_gpu: using Vulkan0 backend   <- GPU really came up
-//! whisper_backend_init_gpu: no GPU found            <- silent CPU fallback
-//! ```
-//!
-//! By default those go straight to stderr via whisper.cpp's built-in
-//! callback -- visible to a human reading a terminal, invisible to the
-//! program. `whisper_log_set` (surfaced by whisper-rs as
-//! [`whisper_rs::set_log_callback`]) replaces that callback, and
-//! whisper.cpp forwards the same callback to `ggml_log_set`, so ONE
-//! install captures both the whisper and ggml streams.
-//!
-//! # Contract with the default behaviour
-//!
-//! Installing a callback SUPPRESSES whisper.cpp's built-in stderr write,
-//! so this trampoline re-emits every line to stderr verbatim. Without
-//! that, opting into provenance would silently delete the whisper.cpp
-//! model-load banner that users and bug reports rely on today. The tap is
-//! additive: same bytes on stderr, plus a machine-readable verdict in
-//! [`crate::whisper::accel`].
-//!
-//! # Callback safety
-//!
-//! The trampoline runs on whatever thread whisper.cpp is loading on, from
-//! C++, so it must not unwind. It therefore:
-//!
-//! * does no allocation-fallible work that can panic (`to_string_lossy`
-//!   and the classifier are total),
-//! * ignores stderr write errors instead of `expect`-ing them,
-//! * wraps the whole body in `catch_unwind` as a backstop -- a panic
-//!   crossing the FFI boundary is undefined behaviour, and a diagnostic
-//!   tap must never be able to take down a dictation session.
+//! Preserve whisper.cpp logging and capture synchronous GPU evidence from
+//! the specific model-load or state-creation call that produced it.
 
+use std::cell::Cell;
 use std::ffi::{c_char, c_void, CStr};
 use std::io::Write;
 use std::panic::catch_unwind;
@@ -53,11 +16,6 @@ use whisper_rs::whisper_rs_sys::ggml_log_level;
 static INSTALL: Once = Once::new();
 
 /// Redirect whisper.cpp + ggml logging through [`log_trampoline`].
-///
-/// Idempotent and cheap after the first call. MUST be called before
-/// `WhisperContext::new_with_params` -- the backend-selection lines are
-/// emitted during that call and a callback installed afterwards would
-/// miss the only evidence there is.
 pub(crate) fn install() {
     INSTALL.call_once(|| {
         // SAFETY: `log_trampoline` is `extern "C"`, does not unwind (its
@@ -70,9 +28,87 @@ pub(crate) fn install() {
     });
 }
 
-/// whisper.cpp / ggml log callback: tee to stderr (preserving the
-/// default behaviour we just displaced) and feed the line to the
-/// accelerator classifier.
+#[derive(Clone, Copy, Default)]
+pub(super) struct GpuEvidence {
+    pub(super) resident_mib: u32,
+    pub(super) state: GpuState,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) enum GpuState {
+    #[default]
+    Unknown,
+    Vulkan,
+    Failed,
+}
+
+fn vulkan_index(name: &str) -> Option<i32> {
+    name.strip_prefix("Vulkan")?.parse().ok()
+}
+
+impl GpuEvidence {
+    fn note(&mut self, index: i32, line: &str) {
+        if let Some(message) = line.strip_prefix("whisper_backend_init_gpu: ") {
+            let message = message.trim_end();
+            if message == "no GPU found" || message.starts_with("failed to initialize ") {
+                self.state = GpuState::Failed;
+            } else if self.state != GpuState::Failed
+                && message
+                    .strip_prefix("using ")
+                    .and_then(|name| name.strip_suffix(" backend"))
+                    .and_then(vulkan_index)
+                    == Some(index)
+            {
+                self.state = GpuState::Vulkan;
+            }
+        }
+        if let Some(size) = line
+            .strip_prefix("whisper_model_load: ")
+            .and_then(|line| line.trim_start().split_once(" total size = "))
+            .filter(|(device, _)| vulkan_index(device) == Some(index))
+            .map(|(_, size)| size)
+            .and_then(|size| size.trim().strip_suffix(" MB"))
+            .and_then(|size| size.trim().parse::<f64>().ok())
+        {
+            // Upstream logs decimal MB rounded to two places. Credit only
+            // whole MiB and subtract half a rounding unit first.
+            let mib = ((size - 0.005) * (1_000_000.0 / 1_048_576.0)) as u32;
+            self.resident_mib = self.resident_mib.saturating_add(mib);
+        }
+    }
+}
+
+thread_local! {
+    static CAPTURE: Cell<Option<(i32, GpuEvidence)>> = const { Cell::new(None) };
+}
+
+/// Collect only logs from this call and this thread. Restore the previous
+/// scope even if the native wrapper panics.
+pub(super) fn observe<T>(index: i32, f: impl FnOnce() -> T) -> (T, GpuEvidence) {
+    struct Restore(Option<(i32, GpuEvidence)>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CAPTURE.set(self.0);
+        }
+    }
+
+    install();
+    let _restore = Restore(CAPTURE.replace(Some((index, GpuEvidence::default()))));
+    let result = f();
+    let (_, evidence) = CAPTURE.get().expect("observation scope is active");
+    (result, evidence)
+}
+
+fn note(line: &str) {
+    CAPTURE.with(|slot| {
+        if let Some((index, mut evidence)) = slot.get() {
+            evidence.note(index, line);
+            slot.set(Some((index, evidence)));
+        }
+    });
+}
+
+/// Tee whisper.cpp / ggml logging to stderr and the current capture scope.
 unsafe extern "C" fn log_trampoline(
     _level: ggml_log_level,
     text: *const c_char,
@@ -94,6 +130,52 @@ unsafe extern "C" fn log_trampoline(
         // `transcribe-server` helper), neither of which is actionable
         // from inside a log callback.
         let _ = std::io::stderr().write_all(line.as_bytes());
-        crate::whisper::accel::global().note_log_line(&line);
+        note(&line);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DEVICE: &str = "whisper_backend_init_gpu: using Vulkan1 backend\n";
+
+    #[test]
+    fn state_requires_the_selected_vulkan_backend_in_the_current_scope() {
+        let (_, wrong_device) = observe(0, || note(DEVICE));
+        assert_eq!(wrong_device.state, GpuState::Unknown);
+
+        let (_, found) = observe(1, || note(DEVICE));
+        assert_eq!(found.state, GpuState::Vulkan);
+
+        note(DEVICE);
+        let (_, fresh) = observe(1, || std::thread::spawn(|| note(DEVICE)).join().unwrap());
+        assert_eq!(fresh.state, GpuState::Unknown);
+    }
+
+    #[test]
+    fn state_fallback_overrides_an_attempted_gpu_initialization() {
+        for failure in [
+            "whisper_backend_init_gpu: failed to initialize Vulkan1 backend\n",
+            "whisper_backend_init_gpu: no GPU found\n",
+        ] {
+            let (_, evidence) = observe(1, || {
+                note(DEVICE);
+                note(failure);
+                note(DEVICE);
+            });
+            assert_eq!(evidence.state, GpuState::Failed);
+        }
+    }
+
+    #[test]
+    fn model_load_credits_only_verified_device_local_weights() {
+        let (_, evidence) = observe(1, || {
+            note("whisper_model_load:      Vulkan0 total size =   100.00 MB\n");
+            note("whisper_model_load:          CPU total size =   100.00 MB\n");
+            note("whisper_model_load:      Vulkan1 total size =   100.00 MB\n");
+        });
+        assert_eq!(evidence.resident_mib, 95);
+        assert_eq!(evidence.state, GpuState::Unknown);
+    }
 }

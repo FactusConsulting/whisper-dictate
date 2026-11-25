@@ -60,32 +60,36 @@ impl WhisperDictateApp {
     /// Keep a clean installation actionable from the first screen: local
     /// dictation cannot start until the selected GGML model has been verified,
     /// so show the same download control used in Settings directly above the
-    /// runtime log. Existing custom model paths and cloud backends need no
-    /// setup banner.
+    /// runtime log. A fitting custom model skips download setup; an
+    /// incompatible GPU or model shows advice without download controls.
     pub(in crate::ui) fn selected_whisper_model_setup_banner(
         &mut self,
         ui: &mut egui::Ui,
         palette: UiPalette,
     ) {
-        if SttBackendMode::from_raw(&self.settings.stt_backend) != SttBackendMode::Whisper
-            || self.has_external_whisper_model_path()
-        {
+        if SttBackendMode::from_raw(&self.settings.stt_backend) != SttBackendMode::Whisper {
             return;
         }
 
-        let model = self.settings.model.trim();
-        let entry = model_manager::find(model);
-        let visible_entry = entry.filter(|selected| {
-            model_manager::visible_catalog().any(|candidate| candidate.name == selected.name)
-        });
+        let model = self.pending_whisper_model();
+        let model = model.trim();
+        let capacity_warning = self.whisper_capacity_warning(model);
         let external_path_is_set = std::env::var_os(WHISPER_MODEL_PATH_ENV).is_some();
-        let Some(message) = setup_banner_for_entry(
-            external_path_is_set,
-            entry,
-            visible_entry.is_some(),
-            model,
-            |selected| self.whisper_model_downloads.availability_fast(selected),
-        ) else {
+        if capacity_warning.is_none() && external_path_is_set {
+            return;
+        }
+        let entry = model_manager::find(model);
+        let visible_entry = entry.filter(|selected| !selected.hidden);
+        let can_setup_model = capacity_warning.is_none();
+        let Some(message) = capacity_warning.or_else(|| {
+            setup_banner_for_entry(
+                external_path_is_set,
+                entry,
+                visible_entry.is_some(),
+                model,
+                |selected| self.whisper_model_downloads.availability_fast(selected),
+            )
+        }) else {
             return;
         };
 
@@ -98,13 +102,13 @@ impl WhisperDictateApp {
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 ui.label(
-                    egui::RichText::new("Local Whisper model required")
+                    egui::RichText::new("Local Whisper setup")
                         .strong()
                         .color(palette.warn_text),
                 );
                 ui.label(message);
                 ui.add_space(4.0);
-                if !external_path_is_set {
+                if can_setup_model && !external_path_is_set {
                     if let Some(selected) = visible_entry {
                         let any_running = self.whisper_model_downloads.any_in_progress();
                         let downloads_blocked = self.local_only_downloads_blocked();

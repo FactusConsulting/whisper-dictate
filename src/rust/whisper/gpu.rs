@@ -1,19 +1,8 @@
 //! GPU policy parsing for the local Whisper inference path.
 //!
-//! Split out from `local.rs` so the parse rules can be exercised in pure
-//! unit tests without touching whisper.cpp or requiring a GPU backend to
-//! be compiled in. The module is **always** compiled (just like
-//! [`super::idle::env`]) so the env-var contract is consistent across
-//! builds — only the resolution of the policy to an actual
-//! `WhisperContextParameters.use_gpu` boolean depends on the
-//! `whisper-rs-vulkan` feature.
-//!
-//! First GPU backend for the Rust
-//! `whisper-rs-local` transcription path. Vulkan was chosen over CUDA
-//! DirectML / Metal because it is the only backend that covers both
-//! Windows AND Linux from a single feature flag, vendor-agnostically.
-//! Further backends (DirectML, Metal) will land as additional features
-//! that add their own variant to [`GpuPolicy`].
+//! The environment vocabulary is shared across builds. Local transcription
+//! requires a usable Vulkan GPU; only the load-only diagnostic uses CPU.
+//! Vulkan is the same vendor-neutral backend on Windows and Linux.
 
 use anyhow::{anyhow, Result};
 
@@ -21,12 +10,11 @@ use anyhow::{anyhow, Result};
 /// inference path.
 ///
 /// Value semantics (parsed by [`parse_gpu_policy_from_env`]):
-/// - **Unset, empty, `auto`, `default`** → [`GpuPolicy::Auto`]: use GPU iff
-///   the binary was built with a GPU backend feature, CPU otherwise.
-/// - **`off`, `cpu`, `0`, `false`, `no`** → [`GpuPolicy::Off`]: never ask
-///   whisper.cpp for GPU even if a backend is compiled in.
-/// - **`vulkan`** → [`GpuPolicy::Vulkan`]: prefer Vulkan; falls back to CPU
-///   silently if the build doesn't include `whisper-rs-vulkan`.
+/// - **Unset, empty, `auto`, `default`** → [`GpuPolicy::Auto`]: require a
+///   usable GPU with a supported backend.
+/// - **`off`, `cpu`, `0`, `false`, `no`** → [`GpuPolicy::Off`]: refuse local
+///   transcription rather than running it on CPU.
+/// - **`vulkan`** → [`GpuPolicy::Vulkan`]: require a usable Vulkan GPU.
 ///
 /// All matching is case-insensitive — env vars get spelt differently across
 /// shells, UI dropdowns, and shell-history paste. Anything else is a hard
@@ -38,18 +26,8 @@ pub const GPU_ENV: &str = "VOICEPI_WHISPER_GPU";
 
 /// Fallback env var consulted only when [`GPU_ENV`] is unset.
 ///
-/// `VOICEPI_DEVICE` is the long-standing user-facing knob documented in
-/// `docs/CONFIGURATION.md` for forcing CPU vs CUDA (`auto` | `cuda` |
-/// `cpu`). When a user has
-/// `VOICEPI_DEVICE=cpu` set to force CPU and then
-/// opts into the Rust transcribe backend on a Vulkan-built binary, they
-/// expect the same "force CPU" intent to be honoured rather than being
-/// silently overridden by Auto picking Vulkan. So when [`GPU_ENV`] is
-/// unset we consult [`DEVICE_FALLBACK_ENV`]: `cpu` → [`GpuPolicy::Off`],
-/// every other value (or absent) → fall through to the default
-/// [`GpuPolicy::Auto`]. Explicit [`GPU_ENV`] always wins so the user can
-/// still force GPU on a `VOICEPI_DEVICE=cpu` setup if they really want
-/// to.
+/// If the explicit Whisper setting is absent, `VOICEPI_DEVICE=cpu`
+/// disables local Whisper. Other values use [`GpuPolicy::Auto`].
 pub const DEVICE_FALLBACK_ENV: &str = "VOICEPI_DEVICE";
 
 /// Which GPU policy to apply when constructing a
@@ -62,14 +40,12 @@ pub const DEVICE_FALLBACK_ENV: &str = "VOICEPI_DEVICE";
 /// combining the policy with `cfg!(feature = "whisper-rs-vulkan")`.
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub enum GpuPolicy {
-    /// CPU only — never ask whisper.cpp for GPU even if a backend is built in.
+    /// No local transcription.
     Off,
-    /// Use GPU if the binary was built with a GPU backend feature; CPU otherwise.
+    /// Require a usable GPU on a supported backend.
     #[default]
     Auto,
-    /// Use Vulkan specifically. Falls through to CPU if the build doesn't
-    /// include `whisper-rs-vulkan`; the runtime UX is "best effort with a
-    /// clear log line at startup" rather than refusing to run.
+    /// Require a usable Vulkan GPU.
     Vulkan,
 }
 
@@ -82,16 +58,9 @@ pub enum GpuPolicy {
 ///    explicit `auto` here will pick GPU even when `VOICEPI_DEVICE=cpu`,
 ///    matching the principle that a more-specific knob wins.
 /// 2. **`VOICEPI_DEVICE=cpu`** (case-insensitive, with `GPU_ENV` unset) →
-///    [`GpuPolicy::Off`]. Honours the long-standing "force CPU" intent
-///    users so they
-///    don't get an unexpected GPU activation when they flip to the Rust
-///    backend on a Vulkan build.
-/// 3. **Both unset, or `VOICEPI_DEVICE` is `auto`/`cuda`/anything else** →
-///    [`GpuPolicy::default()`] (Auto). `cuda` is **not** mapped to a
-///    specific GPU policy here,
-///    and Vulkan is the only backend the Rust path supports today; the
-///    feature-aware [`should_use_gpu`] resolver then decides whether
-///    Auto picks GPU or CPU based on the compiled-in backend.
+///    [`GpuPolicy::Off`], which disables local Whisper transcription.
+/// 3. **Both unset, or `VOICEPI_DEVICE` is not `cpu`** →
+///    [`GpuPolicy::Auto`]. Whisper has no CUDA backend.
 ///
 /// The three error modes from [`std::env::var`] for [`GPU_ENV`] are
 /// handled distinctly: `NotPresent` → consult fallback; `NotUnicode` →
@@ -155,24 +124,12 @@ pub(super) fn parse_gpu_policy_str(raw: &str) -> Result<GpuPolicy> {
     }
 }
 
-/// Resolve the final `WhisperContextParameters.use_gpu` boolean from a
-/// [`GpuPolicy`], taking the compiled-in feature flags into account.
-///
-/// - `Off` → `false` unconditionally.
-/// - `Auto` → `true` iff a GPU backend feature is compiled in.
-/// - `Vulkan` → `true` iff `whisper-rs-vulkan` is compiled in. We don't
-///   error here because the runtime UX is "best effort with a clear log
-///   line"; refusing to run when the build is missing the feature would
-///   convert a graceful fallback into a hard failure for users who set
-///   `VOICEPI_WHISPER_GPU=vulkan` on a stock binary.
+/// Whether the policy permits a GPU backend compiled into this build.
+/// This does not check driver, device, or memory availability.
 pub fn should_use_gpu(policy: GpuPolicy) -> bool {
     match policy {
         GpuPolicy::Off => false,
-        // `Auto` and `Vulkan` both reduce to the same boolean today because
-        // Vulkan is the only GPU backend we ship. When DirectML / Metal land
-        // each will get its own cfg-OR clause here and a matching variant
-        // arm so `Auto` keeps meaning "any GPU we have" while the named
-        // policies pick a specific one.
+        // Vulkan is the only GPU backend we ship for Whisper.
         GpuPolicy::Auto | GpuPolicy::Vulkan => cfg!(feature = "whisper-rs-vulkan"),
     }
 }

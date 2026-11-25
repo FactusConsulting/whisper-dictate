@@ -7,12 +7,18 @@
 //! public boundary.
 
 use std::ffi::{c_char, c_void, CStr, CString};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::ptr::{self, NonNull};
 use std::sync::Arc;
 
 use anyhow::{anyhow, Context, Result};
 use libloading::Library;
+
+use super::nemotron_assets::{Accelerator, VerifiedRuntime};
+
+#[path = "nemotron_gpu_registry.rs"]
+mod gpu_registry;
+use gpu_registry::GpuRegistry;
 
 type RawRecognizer = c_void;
 type RawResult = c_void;
@@ -112,13 +118,7 @@ struct NativeApi {
 impl NativeApi {
     fn load(path: &Path) -> Result<Self> {
         let library = unsafe { load_native_library(path) }?;
-        // `Library::get` borrows the library, so copy each function pointer
-        // before moving the library into the API object.
-        unsafe fn symbol<T: Copy>(library: &Library, name: &[u8]) -> Result<T> {
-            Ok(*library
-                .get::<T>(name)
-                .with_context(|| format!("missing NeMo-Speech.cpp symbol {:?}", name))?)
-        }
+        // `Library::get` borrows the library, so copy each function pointer.
         Ok(Self {
             create: unsafe { symbol(&library, b"nemo_speech_asr_create\0")? },
             destroy: unsafe { symbol(&library, b"nemo_speech_asr_destroy\0")? },
@@ -150,6 +150,71 @@ impl NativeApi {
             .filter(|message| !message.trim().is_empty())
             .unwrap_or_else(|| format!("status {status}"));
         anyhow!("NeMo-Speech.cpp ASR failed: {detail}")
+    }
+}
+
+unsafe fn symbol<T: Copy>(library: &Library, name: &[u8]) -> Result<T> {
+    Ok(*unsafe { library.get::<T>(name) }
+        .with_context(|| format!("missing NeMo-Speech.cpp runtime symbol {name:?}"))?)
+}
+
+/// Use the same registry that the pinned ASR library traverses in
+/// BackendManager::init_backends, not Whisper's unrelated device ordering.
+pub(super) struct NativeRuntime {
+    api: NativeApi,
+    accelerator: Accelerator,
+    #[cfg(windows)]
+    registry: Library,
+    #[cfg(windows)]
+    base: Library,
+}
+
+impl NativeRuntime {
+    pub(super) fn load(runtime: &VerifiedRuntime) -> Result<Self> {
+        let api = NativeApi::load(runtime.path())?;
+        #[cfg(windows)]
+        let companion = |name| -> Result<Library> {
+            // GetProcAddress does not search dependencies. Only accept the
+            // verified sibling actually loaded by Windows as a dependency.
+            use libloading::os::windows::Library as WindowsLibrary;
+            let path = runtime
+                .path()
+                .with_file_name(name)
+                .canonicalize()
+                .context("resolve pinned NeMo-Speech.cpp GGML dependency")?;
+            let library = WindowsLibrary::open_already_loaded(&path).with_context(|| {
+                format!("pinned GGML dependency is not loaded: {}", path.display())
+            })?;
+            Ok(library.into())
+        };
+        Ok(Self {
+            api,
+            accelerator: runtime.accelerator(),
+            #[cfg(windows)]
+            registry: companion("ggml.dll")?,
+            #[cfg(windows)]
+            base: companion("ggml-base.dll")?,
+        })
+    }
+
+    pub(super) fn select_gpu(
+        &self,
+        required_mib: u32,
+        capacity: impl FnMut(&CStr) -> Option<(u32, u32)>,
+    ) -> Result<i32> {
+        // On Unix dlsym on the ASR handle also searches its dependencies.
+        #[cfg(not(windows))]
+        let (registry, base) = (&self.api._library, &self.api._library);
+        #[cfg(windows)]
+        let (registry, base) = (&self.registry, &self.base);
+
+        GpuRegistry::load(registry, base)?.select(self.accelerator, required_mib, capacity)
+    }
+
+    pub(super) fn recognize_with(self, model_path: &Path, gpu: i32) -> Result<NativeRecognizer> {
+        // Pinned v0.1.0 throws if this nonnegative index is absent or GPU
+        // initialization fails. It cannot demote the model to CPU-only.
+        NativeRecognizer::create(self.api, model_path, gpu)
     }
 }
 
@@ -201,8 +266,11 @@ pub(crate) struct NativeRecognizer {
 unsafe impl Send for NativeRecognizer {}
 
 impl NativeRecognizer {
-    pub(crate) fn new(library_path: &Path, model_path: &Path, gpu: i32) -> Result<Self> {
-        let api = Arc::new(NativeApi::load(library_path)?);
+    fn create(api: NativeApi, model_path: &Path, gpu: i32) -> Result<Self> {
+        if gpu < 0 {
+            return Err(anyhow!("CPU inference is not allowed for local Nemotron"));
+        }
+        let api = Arc::new(api);
         let model_path = CString::new(model_path.to_string_lossy().as_bytes())
             .context("Nemotron model path contains an embedded NUL")?;
         let backend = BackendConfig {
@@ -376,62 +444,4 @@ impl Drop for ResultGuard {
 pub(crate) struct NativeResult {
     pub(crate) text: String,
     pub(crate) language: Option<String>,
-}
-
-/// Locate the C ABI beside the executable before falling back to the platform
-/// loader search path. An explicit path always wins, which is useful for a
-/// portable install or a developer checkout of NeMo-Speech.cpp. Windows does
-/// not accept a bare DLL name: the legacy loader search order includes the
-/// current working directory, which would let an unrelated DLL be loaded.
-pub(crate) fn resolve_library_path(explicit: Option<&str>) -> Result<PathBuf> {
-    if let Some(value) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
-        let path = PathBuf::from(value);
-        if path.is_file() {
-            return Ok(path);
-        }
-        return Err(anyhow!(
-            "NeMo-Speech.cpp ASR library override does not exist: {}",
-            path.display()
-        ));
-    }
-    let mut candidates = Vec::new();
-    if let Some(parent) = std::env::current_exe()
-        .ok()
-        .and_then(|path| path.parent().map(Path::to_path_buf))
-    {
-        candidates.extend([
-            parent.join("nemo_speech_asr_c.dll"),
-            parent.join("libnemo_speech_asr_c.so"),
-            parent.join("libnemo_speech_asr_c.dylib"),
-            parent.join("bin").join("nemo_speech_asr_c.dll"),
-        ]);
-    }
-    if let Some(path) = candidates.into_iter().find(|path| path.is_file()) {
-        return Ok(path);
-    }
-    platform_loader_fallback().ok_or_else(|| {
-        anyhow!(
-            "NeMo-Speech.cpp runtime was not found beside the application; set VOICEPI_NEMOTRON_LIBRARY or let Whisper Dictate install the verified runtime"
-        )
-    })
-}
-
-// Let the Unix platform loader search LD_LIBRARY_PATH/the loader cache as a
-// final fallback. On Windows require an explicit or adjacent path so
-// libloading never consults the current working directory.
-fn platform_loader_fallback() -> Option<PathBuf> {
-    #[cfg(windows)]
-    return None;
-    #[cfg(target_os = "macos")]
-    return Some(PathBuf::from("libnemo_speech_asr_c.dylib"));
-    #[cfg(not(any(windows, target_os = "macos")))]
-    Some(PathBuf::from("libnemo_speech_asr_c.so"))
-}
-
-/// Probe a path through the platform loader without requiring a model or
-/// calling any of the exported symbols. On Windows callers pass only explicit
-/// or application-adjacent paths; Unix may use a bare soname registered with
-/// LD_LIBRARY_PATH or the loader cache.
-pub(crate) fn library_is_loadable(path: &Path) -> bool {
-    unsafe { load_native_library(path).is_ok() }
 }

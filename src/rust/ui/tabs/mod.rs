@@ -13,6 +13,7 @@ mod hotkey_verify;
 #[cfg(test)]
 #[path = "hotkey_verify_tests.rs"]
 mod hotkey_verify_tests;
+mod hviske;
 mod log_card;
 #[cfg(test)]
 mod log_card_tests;

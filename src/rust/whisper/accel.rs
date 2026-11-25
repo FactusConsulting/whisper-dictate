@@ -1,45 +1,10 @@
 //! Which compute path whisper.cpp **actually** used, as opposed to which
 //! one the build/config asked for.
 //!
-//! # Why this exists
-//!
-//! `VOICEPI_WHISPER_GPU` / `VOICEPI_DEVICE` say what the operator *asked*
-//! for and `cfg!(feature = "whisper-rs-vulkan")` says what the binary
-//! *can* do -- neither says what happened. A Vulkan-linked binary on a
-//! machine with a broken/absent Vulkan ICD loads the model on CPU
-//! silently: whisper.cpp logs `whisper_backend_init_gpu: no GPU found`
-//! and carries on. Before this module the only observable signal was
-//! `device=auto` on the utterance row, which is the *setting*, so a
-//! CPU fallback was indistinguishable from a working GPU run.
-//!
-//! This module turns whisper.cpp's own model-load log lines into a
-//! machine-readable [`Accel`] verdict:
-//!
-//! ```text
-//! whisper_init_from_file_with_params_no_state: use gpu    = 1
-//! whisper_backend_init_gpu: using Vulkan0 backend
-//! ```
-//!
-//! The feature-gated tap in [`super::local::log_tap`] installs a
-//! whisper.cpp log callback and feeds every line to
-//! [`AccelObserver::note_log_line`]; the observed verdict is then
-//! surfaced as the `stt_accel` field on every utterance record and on the
-//! startup `[runtime] transcribe backend resolved: ...` line.
-//!
-//! The module is compiled **unconditionally** (like [`super::gpu`]) so the
-//! classifier is unit-tested on every CI run without whisper.cpp / CMake
-//! on the build host, and so always-compiled consumers (the
-//! `transcribe-server` JSON protocol in [`super::protocol`]) can read the
-//! verdict on a stock build too -- where it is simply `unknown`.
-//!
-//! # Planned vs observed
-//!
-//! [`AccelObserver::resolved`] prefers the OBSERVED verdict and falls back
-//! to the PLANNED one ([`planned_from_policy`], derived from the env
-//! policy plus the compiled-in backend). The fallback only matters before
-//! the first model load; once whisper.cpp has spoken, its word wins --
-//! which is the entire point (a plan that says `vulkan` and an outcome of
-//! `cpu` is exactly the bug this module makes visible).
+//! Startup reports a plan before the lazy model is loaded. The inference
+//! path records an observed verdict only after verifying its Whisper state
+//! on the selected GPU. This observer is diagnostic; it does not decide
+//! whether inference may run.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -58,7 +23,7 @@ pub enum Accel {
     /// Nothing has been observed yet, or the signal was not recognised.
     #[default]
     Unknown,
-    /// whisper.cpp ran on the CPU backend.
+    /// CPU backend signal (not used for local Whisper transcription).
     Cpu,
     /// whisper.cpp initialised a CUDA GPU backend.
     Cuda,
@@ -121,7 +86,7 @@ impl Accel {
 /// builds. Returns `None` for every line that says nothing about the
 /// compute path (the overwhelming majority of whisper.cpp's banner).
 ///
-/// Recognised lines, in the order they appear during a model load:
+/// Recognised diagnostic lines:
 ///
 /// * `whisper_init_from_file_with_params_no_state: use gpu    = 0`
 ///   -> [`Accel::Cpu`]. `= 1` yields `None`: it is the REQUEST, not the
@@ -235,24 +200,7 @@ impl AccelObserver {
         }
     }
 
-    /// Begin a model load: forget the PREVIOUS load's verdict and stamp
-    /// this load's plan.
-    ///
-    /// The rank ratchet in [`Self::record`] only exists to order the log
-    /// lines WITHIN one load's burst (`use gpu = 1` and `no GPU found`
-    /// arrive around the `using Vulkan0 backend` line). Across loads it
-    /// would be exactly wrong: `IdleUnloadingModel` drops the model after
-    /// `VOICEPI_WHISPER_IDLE_UNLOAD_S` and lazy-reloads on the next press,
-    /// so a box that had a working GPU on the first load and lost it
-    /// before the second (driver reset, eGPU unplugged, VRAM taken by
-    /// another process) would keep reporting `vulkan` for the rest of the
-    /// process -- silently reintroducing the very fallback this module
-    /// exists to expose. Clearing the observation here makes each load
-    /// start blind.
-    ///
-    /// Loads are serialised by `IdleUnloadingModel`'s own
-    /// `Mutex<Option<M>>` (the preview engine shares that wrapper), so no
-    /// second load can be publishing observations while this one clears.
+    /// Start a new load or inference pass with no previous observation.
     pub fn begin_model_load(&self, planned: Accel) {
         self.reset_observed();
         self.set_planned(planned);
@@ -286,8 +234,7 @@ impl AccelObserver {
         }
     }
 
-    /// What whisper.cpp actually reported, or `None` before the first
-    /// model load (or on a build with no whisper.cpp at all).
+    /// Observed accelerator, or `None` if it has not been confirmed.
     pub fn observed(&self) -> Option<Accel> {
         match Accel::from_u8(self.observed.load(Ordering::Relaxed)) {
             Accel::Unknown => None,
@@ -322,8 +269,7 @@ impl AccelObserver {
     }
 }
 
-/// The process-wide observer the whisper.cpp log tap writes to and every
-/// provenance consumer reads from.
+/// The process-wide observer shared by Whisper provenance consumers.
 pub fn global() -> &'static AccelObserver {
     static GLOBAL: AccelObserver = AccelObserver::new();
     &GLOBAL

@@ -38,6 +38,7 @@ fn app_in_mode_with_settings(
 #[test]
 fn simple_mode_hides_advanced_only_speech_rows() {
     let mut app = app_in_mode(SettingsMode::Simple);
+    app.gpu_total_mb = Some(8192);
     let texts = rendered_texts_for_tab(&mut app, Tab::Speech);
 
     for hidden in [
@@ -56,6 +57,7 @@ fn simple_mode_hides_advanced_only_speech_rows() {
 #[test]
 fn simple_mode_still_shows_every_essential_speech_row() {
     let mut app = app_in_mode(SettingsMode::Simple);
+    app.gpu_total_mb = Some(8192);
     let texts = rendered_texts_for_tab(&mut app, Tab::Speech);
 
     for visible in [
@@ -78,6 +80,7 @@ fn simple_mode_still_shows_every_essential_speech_row() {
 #[test]
 fn advanced_mode_shows_every_speech_row() {
     let mut app = app_in_mode(SettingsMode::Advanced);
+    app.gpu_total_mb = Some(8192);
     let texts = rendered_texts_for_tab(&mut app, Tab::Speech);
 
     for visible in [
@@ -91,6 +94,21 @@ fn advanced_mode_shows_every_speech_row() {
             "'{visible}' must be visible in Advanced mode, got: {texts:?}"
         );
     }
+}
+
+#[test]
+fn cpu_only_speech_omits_local_model_controls_but_keeps_hosted_options() {
+    let mut app = app_in_mode(SettingsMode::Advanced);
+    app.gpu_total_mb = None;
+    let texts = rendered_texts_for_tab(&mut app, Tab::Speech);
+
+    assert!(!contains_text(&texts, "Whisper model"));
+    assert!(!contains_text(&texts, "Device"));
+    assert!(contains_text(
+        &texts,
+        "Local Whisper needs a compatible GPU"
+    ));
+    assert!(contains_text(&texts, "Cloud STT provider"));
 }
 
 #[test]

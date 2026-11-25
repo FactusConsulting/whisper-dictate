@@ -73,10 +73,6 @@ pub(crate) enum InProcessInstallError {
     /// Config load failed (`config::load_settings`). Wraps the anyhow
     /// error string; the supervisor forwards it verbatim to stderr.
     ConfigLoadFailed(String),
-    /// Effective runtime options request a capability absent from this
-    /// build. Checked after applying saved/UI overrides and before any
-    /// audio, model, coordinator, or hotkey resources are installed.
-    InvalidOptions(String),
     /// Config's PTT `settings.key` was empty. Same message shape as the
     /// `dictate-run` verb so users get consistent guidance.
     EmptyChord,
@@ -112,24 +108,15 @@ impl std::fmt::Display for InProcessInstallError {
             Self::ConfigLoadFailed(msg) => {
                 write!(f, "in-process Rust runtime could not load config ({msg})")
             }
-            Self::InvalidOptions(msg) => {
-                write!(
-                    f,
-                    "in-process Rust runtime rejected its effective options ({msg})"
-                )
-            }
             Self::EmptyChord => write!(
                 f,
                 "in-process Rust runtime refused: no PTT chord configured \
                  (settings.key is empty); set one via \
                  `wd config set key ctrl_l+shift_l` and retry"
             ),
-            Self::MissingBackend(msg) => write!(
-                f,
-                "in-process Rust runtime cannot serve PTT ({msg}). Rebuild with \
-                 `--no-default-features --features shipping` and ensure the \
-                 configured local model and native runtime libraries are installed"
-            ),
+            Self::MissingBackend(msg) => {
+                write!(f, "in-process Rust runtime cannot serve PTT ({msg})")
+            }
             Self::HotkeyInstallFailed(msg) => {
                 write!(f, "in-process Rust hotkey install failed ({msg})")
             }

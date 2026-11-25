@@ -222,6 +222,7 @@ fn an_unconfigured_local_install_is_skipped_with_a_logged_reason() {
             ..AppSettings::default()
         };
         let mut app = test_app(settings);
+        app.gpu_total_mb = Some(8192);
         // A start that would also be blocked, so a regressed skip policy
         // still shows up as a refusal rather than reaching the supervisor.
         app.background_task_label = Some(RUN_BENCHMARK_LABEL);

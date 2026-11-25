@@ -227,9 +227,6 @@ impl RuntimeSupervisor {
         }
         let ambient_live_env = crate::config::ambient_live_runtime_env();
 
-        if crate::diag::debug_enabled() {
-            crate::diag::log!("[runtime/debug] start stage=validate-effective-options");
-        }
         let effective_device = command.runtime.settings().device.as_str();
         let effective_stt_backend = command.runtime.settings().stt_backend.as_str();
         if crate::diag::trace_enabled() {
@@ -239,12 +236,6 @@ impl RuntimeSupervisor {
                 ascii_escape(effective_stt_backend)
             );
         }
-        super::dictate_run::validate_native_runtime_options(
-            Some(effective_device),
-            Some(effective_stt_backend),
-            cfg!(feature = "whisper-rs-vulkan"),
-        )
-        .map_err(|err| InProcessInstallError::InvalidOptions(err.to_string()))?;
 
         if crate::diag::debug_enabled() {
             crate::diag::log!("[runtime/debug] start stage=build-backends-and-install-hotkey");
@@ -335,7 +326,6 @@ pub(super) fn install_error_stage(error: &InProcessInstallError) -> &'static str
     match error {
         InProcessInstallError::FeaturesMissing => "feature-check",
         InProcessInstallError::ConfigLoadFailed(_) => "config-load",
-        InProcessInstallError::InvalidOptions(_) => "runtime-options",
         InProcessInstallError::EmptyChord => "hotkey-config",
         InProcessInstallError::MissingBackend(_) => "backend-build",
         InProcessInstallError::HotkeyInstallFailed(_) => "hotkey-install",

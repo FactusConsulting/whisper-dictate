@@ -4,9 +4,8 @@
 //! native runtime remain separately licensed upstream artifacts.  This module
 //! makes that distinction invisible to normal users: selecting the in-process
 //! Nemotron provider resolves the official model id to a per-user cache and
-//! downloads/verifies the model and NeMo-Speech.cpp runtime on first use.  An
-//! explicit local path or library override still wins for developers and
-//! air-gapped installations.
+//! downloads/verifies the model and NeMo-Speech.cpp runtime on first use.
+//! Local GGUF files remain user-managed; native runtimes must be verified.
 
 use std::fs;
 use std::hash::{Hash, Hasher};
@@ -187,68 +186,91 @@ fn ensure_model_asset_at(
     Ok(target.to_path_buf())
 }
 
-/// Locate the native runtime beside the executable or in the cache. If no
-/// override was supplied, download and extract NVIDIA's verified archive.
-pub(crate) fn library_path_for_request(explicit: Option<&str>, device: &str) -> Result<PathBuf> {
-    if let Some(value) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
-        let path = PathBuf::from(value);
-        if path.is_file() {
-            return Ok(path);
-        }
-        return Err(anyhow!(
-            "NeMo-Speech.cpp ASR library override does not exist: {}",
-            path.display()
-        ));
-    }
-    if should_reuse_discovered_runtime(device, true) {
-        if let Ok(path) = super::nemotron_ffi::resolve_library_path(None) {
-            if path.is_file() || super::nemotron_ffi::library_is_loadable(&path) {
-                return Ok(path);
-            }
-        }
-    }
-    let asset = runtime_asset(device);
-    Ok(runtime_paths(asset)?.2)
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Accelerator {
+    Vulkan,
+    Cuda,
 }
 
-#[cfg(test)]
-pub(crate) fn ensure_library_path(
-    explicit: Option<&str>,
-    device: &str,
-    local_only: bool,
-) -> Result<PathBuf> {
-    ensure_library_path_while(explicit, device, local_only, true, &AtomicBool::new(true))
+impl Accelerator {
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::Vulkan => "vulkan",
+            Self::Cuda => "cuda",
+        }
+    }
+
+    pub(super) const fn available(self) -> bool {
+        use crate::whisper::device_options;
+        match self {
+            Self::Vulkan => device_options::nemotron_vulkan_runtime_available(),
+            Self::Cuda => device_options::nemotron_cuda_runtime_available(),
+        }
+    }
 }
 
-/// As [`ensure_library_path`], while observing the owning runtime lifecycle.
-pub(crate) fn ensure_library_path_while(
+/// A runtime resolved from a pinned accelerator archive, never from ambient
+/// loader discovery or an unchecked user-supplied library path.
+pub(super) struct VerifiedRuntime {
+    path: PathBuf,
+    accelerator: Accelerator,
+}
+
+impl VerifiedRuntime {
+    pub(super) fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub(super) fn accelerator(&self) -> Accelerator {
+        self.accelerator
+    }
+}
+
+pub(super) fn custom_model_size(requested: &str, path: &Path) -> Result<u64> {
+    // Direct files are sized from disk; managed models use the official floor.
+    if !requested.is_empty() && Path::new(requested) == path {
+        return Ok(fs::metadata(path)?.len());
+    }
+    Ok(0)
+}
+
+pub(super) fn ensure_verified_runtime(
     explicit: Option<&str>,
-    device: &str,
+    accelerator: Accelerator,
     local_only: bool,
-    allow_discovered: bool,
     runtime_active: &AtomicBool,
-) -> Result<PathBuf> {
-    let _lock = asset_lock();
-    if let Some(value) = explicit.map(str::trim).filter(|value| !value.is_empty()) {
-        let path = PathBuf::from(value);
-        if path.is_file() {
-            return Ok(path);
-        }
+) -> Result<VerifiedRuntime> {
+    if !accelerator.available() {
         return Err(anyhow!(
-            "NeMo-Speech.cpp ASR library override does not exist: {}",
-            path.display()
+            "no pinned Nemotron {} runtime for this platform",
+            accelerator.label()
         ));
     }
-    if should_reuse_discovered_runtime(device, allow_discovered) {
-        if let Ok(path) = super::nemotron_ffi::resolve_library_path(None) {
-            if path.is_file() || super::nemotron_ffi::library_is_loadable(&path) {
-                return Ok(path);
-            }
-        }
-    }
-    let asset = runtime_asset(device);
-    let (root, archive, _) = runtime_paths(asset)?;
-    ensure_runtime_asset_at(&root, &archive, asset, local_only, runtime_active)
+    let _lock = asset_lock();
+    let asset = runtime_asset(accelerator.label());
+    let (root, archive) = runtime_paths(asset)?;
+    let path = if let Some(explicit) = explicit {
+        let pinned = runtime_cached_library_while(
+            &root,
+            asset.library_filename,
+            asset.sha256,
+            runtime_active,
+        )?;
+        let override_path = fs::canonicalize(explicit).ok();
+        pinned
+            .filter(|path| {
+                override_path.is_some() && fs::canonicalize(path).ok() == override_path
+            })
+            .ok_or_else(|| {
+                anyhow!(
+                    "Nemotron runtime override is not the verified {} runtime; remove VOICEPI_NEMOTRON_LIBRARY to use the pinned runtime",
+                    accelerator.label()
+                )
+            })?
+    } else {
+        ensure_runtime_asset_at(&root, &archive, asset, local_only, runtime_active)?
+    };
+    Ok(VerifiedRuntime { path, accelerator })
 }
 
 fn ensure_runtime_asset_at(
@@ -275,9 +297,9 @@ fn ensure_runtime_asset_at(
     if !archive_verified {
         if local_only {
             return Err(anyhow!(
-                "NeMo-Speech.cpp runtime is missing and local-only mode blocks downloads; extract {} and set VOICEPI_NEMOTRON_LIBRARY to the {} library",
+                "NeMo-Speech.cpp runtime is missing and local-only mode blocks downloads; put the official {} archive in {}",
                 asset.filename,
-                asset.library_filename,
+                archive.parent().unwrap_or(root).display(),
             ));
         }
         download_verified_while(
@@ -314,7 +336,7 @@ fn ensure_runtime_asset_at(
         })
 }
 
-fn runtime_paths(asset: RuntimeAsset) -> Result<(PathBuf, PathBuf, PathBuf)> {
+fn runtime_paths(asset: RuntimeAsset) -> Result<(PathBuf, PathBuf)> {
     let runtime_root = cache_root()?.join("runtime");
     let variant = asset
         .filename
@@ -323,8 +345,7 @@ fn runtime_paths(asset: RuntimeAsset) -> Result<(PathBuf, PathBuf, PathBuf)> {
         .unwrap_or(asset.filename);
     let destination = runtime_root.join(variant);
     let archive = runtime_root.join(asset.filename);
-    let library = destination.join("bin").join(asset.library_filename);
-    Ok((destination, archive, library))
+    Ok((destination, archive))
 }
 
 fn asset_lock() -> std::sync::MutexGuard<'static, ()> {
@@ -332,21 +353,6 @@ fn asset_lock() -> std::sync::MutexGuard<'static, ()> {
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
-}
-
-/// A bundled runtime does not encode whether it was compiled for CPU, Vulkan,
-/// or CUDA.  Only automatic/CPU requests can safely reuse one discovered
-/// beside the executable or through the platform loader; explicit accelerators
-/// must select their pinned cache variant.
-fn may_reuse_discovered_runtime(device: &str) -> bool {
-    matches!(
-        device.trim().to_ascii_lowercase().as_str(),
-        "" | "auto" | "cpu"
-    )
-}
-
-fn should_reuse_discovered_runtime(device: &str, allow_discovered: bool) -> bool {
-    allow_discovered && may_reuse_discovered_runtime(device)
 }
 
 /// Keep the expensive multi-hundred-MB model digest in the process-local

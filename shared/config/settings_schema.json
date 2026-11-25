@@ -61,8 +61,8 @@
       "key": "model",
       "default": "large-v3-turbo",
       "live": false,
-      "choices": ["large-v3-turbo", "large-v3"],
-      "description": "Local Whisper model offered in Settings. Download the selected model explicitly before starting. Hidden legacy tiny, base, small, medium, tiny.en, base.en, and small.en values remain loadable so existing configurations and cached models continue to work.",
+      "choices": ["large-v3-turbo", "large-v3", "edda-v0.2", "edda-v0.2-large"],
+      "description": "Local Whisper model. Settings only offers models that fit a supported Vulkan GPU. Danish Turbo (edda-v0.2) and Danish Quality (edda-v0.2-large) require an explicit selection and transcribe in Danish regardless of the language setting. Download the selected model explicitly before starting. Hidden legacy tiny, base, small, medium, tiny.en, base.en, and small.en values remain valid configuration values.",
       "advanced": false,
       "ui_simple": true,
       "category": "core"
@@ -94,7 +94,7 @@
       "key": "stt_base_url",
       "default": "https://api.openai.com/v1",
       "live": false,
-      "description": "Transcription endpoint used when stt_backend=openai. OpenAI-compatible providers use an https URL; Nemotron uses Riva gRPC (grpc://localhost:50051 locally or https://grpc.nvcf.nvidia.com:443 hosted). Fresh Nemotron selections use inproc://nemotron and automatically download the verified runtime/model; append ?function-id=YOUR_FUNCTION_ID for a multilingual hosted deployment.",
+      "description": "Transcription endpoint used when stt_backend=openai. OpenAI-compatible providers use an https URL; Nemotron uses Riva gRPC (grpc://localhost:50051 or https://grpc.nvcf.nvidia.com:443). With a suitable GPU, Nemotron can use inproc://nemotron and download the verified runtime and model. For hosted multilingual Nemotron, append ?function-id=YOUR_FUNCTION_ID.",
       "advanced": true,
       "category": "stt-cloud"
     },
@@ -116,7 +116,7 @@
       "default": "auto",
       "live": false,
       "choices": ["auto", "vulkan", "cuda", "cpu"],
-      "description": "Compute device for native local STT: auto uses the compiled GPU backend when available; vulkan explicitly requests the Vulkan backend; cuda selects the Nemotron CUDA runtime where a pinned asset is available; cpu disables GPU use.",
+      "description": "Compute device for native local STT: auto selects a supported GPU backend; vulkan requests Vulkan; cuda selects the in-process Nemotron CUDA runtime where a pinned asset is available. Local transcription requires a supported GPU with enough memory and never falls back to CPU. The legacy cpu value is still recognized but is rejected for local transcription.",
       "advanced": false,
       "category": "core"
     },

@@ -29,25 +29,6 @@ pub fn available_device_values() -> Vec<&'static str> {
     values
 }
 
-/// Values the selected STT provider can honour. Nemotron loads its own pinned
-/// runtime, so its GPU choices do not depend on the optional whisper.cpp
-/// Vulkan feature compiled into this binary.
-#[must_use]
-pub fn available_device_values_for_provider(provider: &str) -> Vec<&'static str> {
-    if !provider.trim().eq_ignore_ascii_case("nemotron") {
-        return available_device_values();
-    }
-    let mut values = vec![DEVICE_AUTO];
-    if nemotron_vulkan_runtime_available() {
-        values.push(DEVICE_VULKAN);
-    }
-    if nemotron_cuda_runtime_available() {
-        values.push(LEGACY_DEVICE_CUDA);
-    }
-    values.push(DEVICE_CPU);
-    values
-}
-
 #[must_use]
 pub fn is_device_supported(value: &str) -> bool {
     let canonical = canonicalize_device_value(value);
@@ -119,6 +100,14 @@ pub const fn nemotron_vulkan_runtime_available() -> bool {
     cfg!(any(windows, target_os = "linux"))
 }
 
+/// Conservative VRAM budget for local Nemotron; zero bytes denotes an
+/// official model that has not been downloaded yet.
+pub(crate) fn nemotron_required_mib(file_bytes: u64) -> u32 {
+    let file_mib = file_bytes.div_ceil(1024 * 1024);
+    let required = (file_mib * 3).div_ceil(2) + 1024;
+    required.clamp(2048, u64::from(u32::MAX)) as u32
+}
+
 /// Explain why a recognised device is unavailable in this build.
 #[must_use]
 pub fn missing_device_hint(value: &str) -> Option<&'static str> {
@@ -134,14 +123,4 @@ pub fn missing_device_hint(value: &str) -> Option<&'static str> {
         );
     }
     None
-}
-
-#[must_use]
-pub fn missing_device_footnote() -> &'static str {
-    if any_gpu_backend_compiled() {
-        ""
-    } else {
-        "\n\nThis build has no native GPU backend, so `vulkan` is unavailable. \
-         Install the GPU build or rebuild with `--features whisper-rs-vulkan`."
-    }
 }

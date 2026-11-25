@@ -7,11 +7,6 @@ use std::path::PathBuf;
 /// signal.
 #[test]
 fn load_catch_unwind_missing_file_returns_errored() {
-    let _guard = crate::test_env_lock::lock_env();
-    let saved_gpu = std::env::var_os("VOICEPI_WHISPER_GPU");
-    let saved_device = std::env::var_os("VOICEPI_DEVICE");
-    std::env::remove_var("VOICEPI_WHISPER_GPU");
-    std::env::set_var("VOICEPI_DEVICE", "cpu");
     let bogus = PathBuf::from("/definitely/not/a/real/path/model.bin");
     // Can't use `expect_err` — `LocalWhisper: !Debug` (see the module-level
     // note; whisper-rs's `WhisperContext` doesn't implement Debug and
@@ -21,20 +16,25 @@ fn load_catch_unwind_missing_file_returns_errored() {
         Err(f) => f,
         Ok(_) => panic!("load of {} must fail", bogus.display()),
     };
-    match saved_gpu {
-        Some(value) => std::env::set_var("VOICEPI_WHISPER_GPU", value),
-        None => std::env::remove_var("VOICEPI_WHISPER_GPU"),
-    }
-    match saved_device {
-        Some(value) => std::env::set_var("VOICEPI_DEVICE", value),
-        None => std::env::remove_var("VOICEPI_DEVICE"),
-    }
     assert_eq!(failure.kind(), "errored");
     assert!(
         failure.message().contains("not found") || failure.message().contains("open"),
         "unexpected message: {}",
         failure.message()
     );
+}
+
+#[test]
+fn diagnostic_model_refuses_cpu_inference_when_model_available() {
+    let Some(model) = std::env::var_os("WHISPER_TEST_MODEL_PATH") else {
+        return;
+    };
+    let whisper = LocalWhisper::load_catch_unwind(Path::new(&model))
+        .expect("diagnostic loads model weights on CPU");
+    let err = whisper
+        .transcribe_samples(&[0.0], Some("en"), None)
+        .expect_err("diagnostic must not create a CPU inference state");
+    assert!(err.to_string().contains("load-only"), "{err}");
 }
 
 #[test]

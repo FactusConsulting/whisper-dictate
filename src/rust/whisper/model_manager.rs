@@ -10,14 +10,10 @@
 //! in the curated catalog).
 //!
 //! Scope is intentionally minimal:
-//! - **Catalog**: two user-facing multilingual entries — `large-v3-turbo`
-//!   (fast) and `large-v3` (most accurate). The English-only and mid-size
-//!   variants are still present but `hidden`: this is a multilingual app, so
-//!   `*.en` was never the right NEW choice and `base`/`small`/`medium` only
-//!   added choice paralysis next to turbo — but they stay resolvable so an
-//!   upgrade never strands a user whose cached model is one of them, and so
-//!   CI can keep using the ~78 MB `tiny` fixture. Anything not in the catalog
-//!   is still reachable via `VOICEPI_WHISPER_MODEL_PATH`.
+//! - **Catalog**: stock multilingual Turbo and Large, plus explicitly
+//!   selected Danish Edda presets. Hidden legacy models remain resolvable,
+//!   including the `tiny` test fixture. `VOICEPI_WHISPER_MODEL_PATH` can
+//!   point to a model outside the catalog.
 //! - **Format**: GGML only. whisper.cpp does not yet read GGUF (see the
 //!   `reject_gguf_model` guard in `whisper::local`), so a GGUF entry in the
 //!   catalog would only mislead.
@@ -50,11 +46,8 @@ use sha2::{Digest, Sha256};
 /// One entry in the curated download catalog.
 ///
 /// The fields are deliberately `&'static str` / `u64` (no allocation) so the
-/// catalog is a compile-time constant. The `sha256` value is the canonical
-/// hex-lowercase digest of the file at `url`; the in-binary value is the
-/// source of truth for integrity checks. URLs point at the upstream
-/// `ggerganov/whisper.cpp` HuggingFace mirror — the same source the upstream
-/// `models/download-ggml-model.sh` script uses.
+/// catalog is a compile-time constant. The SHA-256 is the expected digest
+/// of the file at `url` and is checked before it enters the model cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ModelEntry {
     /// Short stable name shown in the UI and accepted by `models download`
@@ -79,6 +72,12 @@ pub struct ModelEntry {
     /// One-line human-readable summary for the UI label
     /// (accuracy / speed / file size tradeoff).
     pub description: &'static str,
+    /// Language forced for this catalog model, regardless of caller hints.
+    pub fixed_language: Option<&'static str>,
+    /// Whether the checkpoint requires decoding without timestamp tokens.
+    pub no_timestamps: bool,
+    /// Model-specific VRAM estimate from hardware validation, in MiB.
+    pub estimated_gpu_mib: Option<u32>,
     /// When true the entry is not offered as a NEW choice: [`visible_catalog`]
     /// filters it out of the Settings list, `models list`, and the
     /// "available:" suggestion in the unknown-model error.
@@ -94,12 +93,14 @@ pub struct ModelEntry {
     pub hidden: bool,
 }
 
-/// Build a [`ModelEntry`] from the fields that actually differ between models.
-///
-/// Every catalog URL is the same HuggingFace path plus the filename, so the
-/// macro derives it — that removes ~8 lines of identical boilerplate per entry
-/// AND makes a filename/URL mismatch structurally impossible, which a
-/// hand-copied block invites.
+impl ModelEntry {
+    pub(crate) fn required_gpu_mib(&self) -> u32 {
+        self.estimated_gpu_mib
+            .unwrap_or_else(|| crate::model_capacity::whisper_required_mib(self.size_bytes))
+    }
+}
+
+/// Stock models share the upstream whisper.cpp mirror.
 macro_rules! model_entry {
     ($name:literal, $file:literal, $sha:literal, $size:literal, $hidden:literal, $desc:literal) => {
         ModelEntry {
@@ -112,6 +113,9 @@ macro_rules! model_entry {
             sha256: $sha,
             size_bytes: $size,
             description: $desc,
+            fixed_language: None,
+            no_timestamps: false,
+            estimated_gpu_mib: None,
             hidden: $hidden,
         }
     };
@@ -119,25 +123,37 @@ macro_rules! model_entry {
 
 /// Curated catalog of whisper.cpp GGML models.
 ///
-/// Deliberately small: whisper-dictate is a MULTILINGUAL app, so the
-/// English-only (`*.en`) variants were never the right answer for a user, and
-/// the mid-range sizes (`base` / `small` / `medium`) only added choice
-/// paralysis next to `large-v3-turbo`. What remains is the real decision
-/// turbo (fast) vs large-v3 (most accurate) — plus hidden test fixtures.
-///
-/// SHA-256 values are pinned to the current `ggerganov/whisper.cpp`
-/// HuggingFace `main` branch — re-verify when bumping.
-// `rustfmt::skip` keeps each entry on ONE line. This is a DATA TABLE, and
-// one row per model is both easier to scan and materially less repetitive:
-// let rustfmt explode these into eight-line blocks and nine structurally
-// identical stanzas appear, which is duplication by any measure (SonarCloud
-// flagged exactly that at 13.2% on new code).
+/// Stock multilingual models come first, followed by explicitly selected
+/// Danish models and retained legacy entries.
 #[rustfmt::skip]
 pub const CATALOG: &[ModelEntry] = &[
-    // User-facing models FIRST — PRIORITY ORDER: `resolve_model_path_from_env`
-    // takes the first cached+verified entry, so these must precede the legacy ones.
+    // Prefer stock models for an implicit cache selection.
     model_entry!("large-v3-turbo", "ggml-large-v3-turbo.bin", "1fc70f774d38eb169993ac391eea357ef47c88757ef72ee5943879b7e8e2bc69", 1_600_000_000, false, "Multilingual, high accuracy, fastest of the large models (~1.6GB)"),
     model_entry!("large-v3", "ggml-large-v3.bin", "64d182b440b98d5203c4f9bd541544d84c605196c4f7b845dfa11fb23594d1e2", 3_100_000_000, false, "Multilingual, best accuracy (~3.1GB)"),
+    ModelEntry {
+        name: "edda-v0.2",
+        filename: "ggml-edda-v0.2-f16.bin",
+        url: "https://huggingface.co/Larswa/edda-whisper-ggml/resolve/a704d24bd9badffb57fecf8b1abd84981f015c0f/ggml-edda-v0.2-f16.bin",
+        sha256: "e5d05af921c39bf460d05f445b330b5d7eb7249f3bad2d27a48cdc50ad51f7da",
+        size_bytes: 1_624_555_275,
+        description: "Danish Turbo: faster and recommended for Danish dictation",
+        fixed_language: Some("da"),
+        no_timestamps: true,
+        estimated_gpu_mib: Some(2816),
+        hidden: false,
+    },
+    ModelEntry {
+        name: "edda-v0.2-large",
+        filename: "ggml-edda-v0.2-large-f16.bin",
+        url: "https://huggingface.co/Larswa/edda-whisper-ggml/resolve/a704d24bd9badffb57fecf8b1abd84981f015c0f/ggml-edda-v0.2-large-f16.bin",
+        sha256: "9fe49bfbc0a7081bff5f01c41be4c831374c93e528b18839cd53fb66fa8857e6",
+        size_bytes: 3_095_033_483,
+        description: "Danish Quality: full large-v3 model for Danish speech",
+        fixed_language: Some("da"),
+        no_timestamps: true,
+        estimated_gpu_mib: Some(4352),
+        hidden: false,
+    },
     // Hidden: not offered as NEW choices, but still resolvable and selectable
     // from cache so an upgrade never strands a user whose only downloaded model
     // is one of these; CI uses `tiny` as its ~78 MB fixture. Last, so a cached

@@ -1,48 +1,116 @@
 # Speech-to-text backends
 
-whisper-dictate exposes two speech-to-text engines. The cloud engine uses an
-OpenAI-compatible request path for OpenAI, Groq, and custom providers, plus
-the Riva gRPC path for NVIDIA Nemotron 3.5 ASR.
+whisper-dictate can transcribe on a supported local GPU or send audio to an
+explicitly configured API endpoint. OpenAI, Groq, and custom providers use an
+OpenAI-compatible request path. NVIDIA Nemotron 3.5 ASR supports both a local
+in-process runtime and Riva gRPC endpoints.
 
 | Engine / provider | `stt_backend` | `stt_provider` | Configuration |
 |---|---|---|---|
-| Local Whisper | `whisper` | _(not used)_ | Set `model`, `device`, and optional `VOICEPI_WHISPER_MODEL_PATH`. |
+| Local Whisper | `whisper` | _(not used)_ | Use a Vulkan-capable build and GPU, select a model that fits, and optionally set `VOICEPI_WHISPER_MODEL_PATH`. |
+| In-process Nemotron 3.5 ASR | `openai` | `nemotron` | Use `inproc://nemotron` and a supported GPU. The app downloads and verifies the official NeMo-Speech.cpp runtime and model. No API key, Docker, or server is needed. |
 | OpenAI | `openai` | `openai` | Set the OpenAI base URL, model, and API key. |
 | Groq | `openai` | `groq` | Set `https://api.groq.com/openai/v1`, a supported Whisper model, and a Groq API key. |
 | Custom OpenAI-compatible endpoint | `openai` | `custom` | Set the endpoint URL, the model name expected by that server, and its API key. |
-| NVIDIA Nemotron 3.5 ASR (NIM) | `openai` | `nemotron` | Fresh selections use `inproc://nemotron`; the app downloads and verifies the official NeMo-Speech.cpp runtime/model into the user cache. Existing NIM deployments can use `grpc://localhost:50051`, and hosted Riva uses `https://grpc.nvcf.nvidia.com:443`. No API key, Docker, or server is needed for in-process decoding. |
+| NVIDIA Nemotron 3.5 ASR (Riva) | `openai` | `nemotron` | Set a Riva endpoint: for example, `grpc://localhost:50051` for a local NIM or `https://grpc.nvcf.nvidia.com:443` for hosted Riva. |
 
 Groq is not a separate `stt_backend` value because it speaks the same
 OpenAI-compatible transcription API as OpenAI. The runtime still records the
 provider separately so it can choose the correct URL, model list, credential,
 prompt limit, and provenance label.
 
+## When local transcription is unavailable
+
+Local Whisper and in-process Nemotron require a supported GPU. Neither falls
+back to CPU or switches to a hosted provider if it cannot load or run. If your
+GPU cannot fit the chosen model, close other GPU-heavy apps and retry or choose
+a smaller supported model, if one is available. If you do not have a suitable
+GPU, consider a [hosted provider](#cloud-providers) that supports your language.
+The app does not switch providers or send audio just because it recommends
+one. Choose and configure a hosted route yourself if you want to use it.
+`VOICEPI_LOCAL_ONLY=1` continues to block remote routes; compatible loopback
+endpoints remain available.
+
 ## Local Whisper
 
-Local transcription uses whisper.cpp with GGML model files. Shipping builds
-include the native local backend; source builds need the `whisper-rs-local`
-Cargo feature. The model is loaded lazily and can be released after an idle
-period with `VOICEPI_WHISPER_IDLE_UNLOAD_S`; the next utterance reloads it.
+Local transcription uses whisper.cpp with GGML model files. The app must be
+built with Vulkan support (`whisper-rs-vulkan` for source builds), and one
+Vulkan adapter must have enough memory; the app does not combine memory
+across GPUs. Whisper Turbo (`large-v3-turbo`) needs an estimated 2.75 GiB,
+while Whisper Quality (`large-v3`) and a ~3.1 GB Edda GGML file need about
+4.25 GiB. The estimate for a custom model depends on its file size.
+
+The Windows installer enables Vulkan when built with the Vulkan SDK. The
+published Linux bundle and current Nix package do not enable Vulkan for
+Whisper. On Linux, build with `--features shipping-vulkan` for local Whisper,
+or choose a hosted endpoint with the published bundle.
+
+Settings checks total GPU memory to indicate which models can fit. A model
+can still fail to load if too little memory is free at runtime or the GPU
+cannot initialize it. The app reports the error rather than running on the
+CPU. The model is loaded lazily and can be released after an idle period with
+`VOICEPI_WHISPER_IDLE_UNLOAD_S`; the next utterance reloads it.
+
+### Danish Turbo and Danish Quality
+
+In **Speech → Local Whisper**, choose **Danish Turbo** (`edda-v0.2`) or
+**Danish Quality** (`edda-v0.2-large`), download the model, then save and
+restart the runtime. Start with Turbo for Danish dictation. Quality uses
+the full large-v3 model and requires more GPU memory. Neither model is
+downloaded or selected automatically.
+
+Both presets always transcribe in Danish, including preview and file
+transcription. The app does not overwrite your language setting. Choose a
+multilingual model to use it again. Both presets work offline once downloaded.
+
+### Use an Edda model from a local file
+
+If you already have a compatible Edda GGML file, select local Whisper, set the
+device to Vulkan and language to Danish (`da`), and enable no-timestamps
+decoding explicitly. A custom file takes precedence over any catalog preset
+and does not lock the language. Exit the running app first, then launch it
+from the same PowerShell session:
+
+```powershell
+$env:VOICEPI_STT_BACKEND = 'whisper'
+$env:VOICEPI_DEVICE = 'vulkan'
+$env:VOICEPI_WHISPER_MODEL_PATH = 'C:\models\edda.ggml.bin'
+$env:VOICEPI_WHISPER_NO_TIMESTAMPS = '1'
+$env:VOICEPI_LANG = 'da'
+wd ui
+```
+
+Use the path to your own GGML file. If `config.json` already specifies the
+speech engine, device, or language, set the corresponding values in Settings;
+those saved values take precedence over the environment variables.
+`VOICEPI_WHISPER_NO_TIMESTAMPS=1` disables timestamp generation during local
+decoding, not just timestamp display. There is no automatic Edda detection:
+this option applies to any local Whisper model loaded by that process.
+Default decoding is unchanged when the variable is unset. When switching
+back to a built-in model, remove the model path and no-timestamps variables
+from the launch shell, restore your language setting, and restart the app.
 
 ## In-process Nemotron
 
 The shipping Rust build includes a dynamic adapter for NVIDIA's official
-[NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) C ABI. In **Speech**
-choose the Nemotron provider and the **Multilingual / Auto** profile; that
-selection sets `inproc://nemotron` and the official model id. On the first
-utterance (in the session worker, so the
-  GUI stays responsive) the app downloads the pinned
+[NeMo-Speech.cpp](https://github.com/NVIDIA/NeMo-Speech.cpp) C ABI. On
+supported hardware, choose Nemotron and **Multilingual / Auto** in
+**Speech** to use `inproc://nemotron` with the official multilingual model.
+On first use, the runtime downloads the pinned
 `nvidia/nemotron-3.5-asr-streaming-0.6b` GGUF (~742 MB) and the matching
 platform runtime archive into the user cache, verifies each SHA-256, and loads
-the DLL/SO in-process. No Docker, NIM server, API key, or manual file copying
-is required. An existing `.gguf` path or `VOICEPI_NEMOTRON_LIBRARY` override
-still works for offline/developer installs.
-  `Language=Auto` is passed explicitly as `auto` to the multilingual checkpoint
-  and is detected afresh for each utterance. `Device=Auto` tries the Vulkan
-  runtime and retries with the verified CPU runtime when a GPU library cannot
-  load. Set `VOICEPI_NEMOTRON_LIBRARY` only when the DLL lives elsewhere. The
-  **Test local model** button becomes a local model-load check and does not
-  require a key.
+the library in-process. No Docker, NIM server, or API key is required. You
+can use a custom `.gguf` file that fits the GPU. For offline deployments,
+install the official pinned runtime archive in the versioned Nemotron
+runtime cache. `VOICEPI_NEMOTRON_LIBRARY` can only point to the verified
+managed library for the chosen accelerator.
+
+`Language=Auto` is passed explicitly as `auto` to the multilingual checkpoint
+and is detected afresh for each utterance. The managed model requires
+at least 2 GiB of available GPU memory. Auto prefers Vulkan and can use
+CUDA on supported NVIDIA systems. It never starts a CPU recognizer.
+**Test local model** checks GPU model loading without recording,
+transcribing audio, or using an API key.
 
 ## Cloud providers
 
@@ -73,10 +141,10 @@ tab or with environment variables. The supported built-in providers are:
   between utterances. Saving a hand-edited English-profile config with Auto is
   rejected with an actionable validation message instead of sending an
   unsupported request.
-  The profile picker also chooses the matching built-in route: **English**
-  selects NVIDIA's public hosted NVCF endpoint and **Multilingual / Auto**
-  selects the local in-process runtime. The endpoint remains editable after
-  that choice for a user-managed local NIM or custom hosted function. Hosted
+  **English** selects NVIDIA's public hosted NVCF endpoint. **Multilingual /
+  Auto** offers the local route only on suitable hardware. For a
+  user-managed NIM or hosted multilingual function, enter its address in
+  the advanced Speech settings.
   NVCF still uses the profile attached to its function id; editing the model id
   alone cannot change a custom deployment.
   A local NIM needs no runtime API key; remote deployments can use
@@ -108,6 +176,27 @@ is the one that can detect a different language on each utterance.
 Point **Test API** and live dictation at `grpc://localhost:50051` to exercise
 the local Riva service. Port 9000 is NIM's HTTP/WebSocket surface and is not a
 valid URL for this application's Nemotron streaming client.
+
+### Third-party Hviske models
+
+In **Speech → Cloud STT → Custom**, select **Hviske v5.3** or **Hviske v6**.
+The app shows the license and audio-routing notice before changing the model.
+The published weights are [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/).
+For commercial use, [contact syv.ai](https://syv.ai/kontakt).
+
+Run the model in a separate GPU-backed server that accepts
+`POST /v1/audio/transcriptions` and returns JSON with a `text` field. See
+the [v5.3 setup](https://huggingface.co/syvai/hviske-v5.3/blob/5d1a09822018702dc51d763e3a867b62d26b3501/README.md#run-with-vllm-openai-compatible-api)
+and the [v6 plugin requirements](https://huggingface.co/syvai/hviske-v6/blob/323b5ffdf54ef22196340a0b37cb11e668fefc5a/vllm/README.md).
+For v6, verify that your deployment can transcribe audio; a successful
+server start alone does not establish compatibility.
+
+Enter the server's `/v1` base URL and save. For a server on the same PC,
+`http://127.0.0.1:8000/v1` is the usual URL. The two preset model IDs send
+`da` and omit speech prompts to preserve the server's decoder controls;
+local dictionary replacements still apply. For [syv.ai's hosted API](https://platform.syv.ai/docs),
+use the model ID shown by that service and its API key; its model IDs can
+differ from the self-hosted presets.
 
 The UI stores provider credentials in the OS credential store. Headless runs
 can use `VOICEPI_STT_API_KEY`, `OPENAI_API_KEY`, or `GROQ_API_KEY` as described

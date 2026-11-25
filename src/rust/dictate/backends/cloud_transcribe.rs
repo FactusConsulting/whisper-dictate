@@ -643,7 +643,11 @@ impl TranscribeBackend for CloudTranscribeBackend {
         // Re-fold the dictionary terms into the prompt per utterance when a
         // reloading prompt is attached (else the fixed config prompt). The
         // profile override wins over both in `effective_*`.
-        let (prompt, dictionary_terms) = self.effective_prompt();
+        let (prompt, dictionary_terms) = if crate::cloud_api::is_hviske_model(&self.config.model) {
+            (None, Vec::new())
+        } else {
+            self.effective_prompt()
+        };
         let request_language = self.request_language();
         let started = Instant::now();
         let request = CloudTranscriptionRequest::new(

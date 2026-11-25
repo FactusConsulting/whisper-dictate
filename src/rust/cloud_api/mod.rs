@@ -38,3 +38,11 @@ pub use transcribe::{
     GROQ_TRANSCRIPTION_PROMPT_LIMIT,
 };
 pub(crate) use transcribe::{provider_host as provider_host_public, resolve_api_key_with};
+
+pub(crate) const HVISKE_V53: &str = "syvai/hviske-v5.3";
+pub(crate) const HVISKE_V6: &str = "syvai/hviske-v6";
+
+pub(crate) fn is_hviske_model(model: &str) -> bool {
+    let model = model.trim();
+    model.eq_ignore_ascii_case(HVISKE_V53) || model.eq_ignore_ascii_case(HVISKE_V6)
+}
