@@ -258,6 +258,14 @@ fn cloud_transcribe_inner(
     }
 
     let base_url = base_url.trim_end_matches('/');
+    let hviske = super::is_hviske_model(model);
+    let (language, prompt) = if hviske {
+        // These Danish-only endpoints use the decoder prompt for control
+        // tokens. Sending ordinary text can replace those required tokens.
+        (Some("da"), None)
+    } else {
+        (language, prompt)
+    };
     let mut fields = vec![("model", model.to_owned())];
     if let Some(language) = language.map(str::trim).filter(|value| !value.is_empty()) {
         fields.push(("language", language.to_owned()));
@@ -292,7 +300,11 @@ fn cloud_transcribe_inner(
         .body_mut()
         .read_json()
         .map_err(|err| anyhow!("cloud transcription returned invalid JSON: {err}"))?;
-    parse_transcription_response(&body)
+    let mut result = parse_transcription_response(&body)?;
+    if hviske {
+        result.language = Some("da".to_owned());
+    }
+    Ok(result)
 }
 
 /// A successful status is not proof of a valid transcription response. An

@@ -192,6 +192,7 @@ impl WhisperDictateApp {
                             &mut self.settings.stt_model,
                             "Model id your self-hosted OpenAI-compatible server expects, for example Systran/faster-whisper-large-v3.",
                         );
+                        self.hviske_model_options(ui, backend == SttBackendMode::Cloud);
                     } else if provider == CloudProvider::Nemotron {
                         let profiles = provider.labeled_model_options();
                         let external_profiles = [

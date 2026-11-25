@@ -172,6 +172,27 @@ Point **Test API** and live dictation at `grpc://localhost:50051` to exercise
 the local Riva service. Port 9000 is NIM's HTTP/WebSocket surface and is not a
 valid URL for this application's Nemotron streaming client.
 
+### Third-party Hviske models
+
+In **Speech → Cloud STT → Custom**, select **Hviske v5.3** or **Hviske v6**.
+The app shows the license and audio-routing notice before changing the model.
+The published weights are [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/).
+For commercial use, [contact syv.ai](https://syv.ai/kontakt).
+
+Run the model in a separate GPU-backed server that accepts
+`POST /v1/audio/transcriptions` and returns JSON with a `text` field. See
+the [v5.3 setup](https://huggingface.co/syvai/hviske-v5.3/blob/5d1a09822018702dc51d763e3a867b62d26b3501/README.md#run-with-vllm-openai-compatible-api)
+and the [v6 plugin requirements](https://huggingface.co/syvai/hviske-v6/blob/323b5ffdf54ef22196340a0b37cb11e668fefc5a/vllm/README.md).
+For v6, verify that your deployment can transcribe audio; a successful
+server start alone does not establish compatibility.
+
+Enter the server's `/v1` base URL and save. For a server on the same PC,
+`http://127.0.0.1:8000/v1` is the usual URL. The two preset model IDs send
+`da` and omit speech prompts to preserve the server's decoder controls;
+local dictionary replacements still apply. For [syv.ai's hosted API](https://platform.syv.ai/docs),
+use the model ID shown by that service and its API key; its model IDs can
+differ from the self-hosted presets.
+
 The UI stores provider credentials in the OS credential store. Headless runs
 can use `VOICEPI_STT_API_KEY`, `OPENAI_API_KEY`, or `GROQ_API_KEY` as described
 in [`CONFIGURATION.md`](CONFIGURATION.md).

@@ -454,9 +454,15 @@ fn build_report(
     } else {
         0.0
     };
-    let dictionary_terms = dictionary
-        .dictionary
-        .prompt_terms(dictionary.max_terms, dictionary.max_chars);
+    let dictionary_terms = if configured == ConfiguredBackend::Cloud
+        && crate::cloud_api::is_hviske_model(resolved_model)
+    {
+        Vec::new()
+    } else {
+        dictionary
+            .dictionary
+            .prompt_terms(dictionary.max_terms, dictionary.max_chars)
+    };
     let configured_language = nonempty_env("VOICEPI_LANG");
     let language = report_language(&result.language, configured_language.as_deref());
     Ok(TranscribeFileReport {
