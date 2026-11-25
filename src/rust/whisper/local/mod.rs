@@ -236,7 +236,7 @@ impl LocalWhisper {
     }
 
     /// Check local Whisper hardware before constructing the recording session.
-    #[cfg(all(feature = "audio-capture", feature = "rust-injection"))]
+    #[cfg(native_session)]
     pub(crate) fn check_gpu_capacity(model: &ResolvedModel, policy: GpuPolicy) -> Result<()> {
         select_model_gpu(&model.path, model.entry, policy).map(|_| ())
     }

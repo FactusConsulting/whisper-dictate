@@ -88,7 +88,39 @@ fn runtime_snapshot_generic_keys_are_not_sent_to_unrelated_http_endpoint() {
 }
 
 #[test]
-fn hviske_uses_danish_without_a_free_text_decoder_prompt() {
+fn hviske_suppresses_dictionary_bias_but_keeps_transcript_replacements() {
+    use crate::dictionary::{Dictionary, Replacement, SessionDictionary};
+    use crate::postprocess::settings_from_env_with;
+    use crate::transcribe_file::{build_cloud_backend, transcribe_path, ConfiguredBackend};
+
+    let directory = tempfile::tempdir().unwrap();
+    let wav = directory.path().join("speech.wav");
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16_000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(&wav, spec).unwrap();
+    for amplitude in [32_i16, 16_384, 32, 16_384, 32, 16_384] {
+        for _ in 0..480 {
+            writer.write_sample(amplitude).unwrap();
+        }
+    }
+    writer.finalize().unwrap();
+
+    let dictionary = SessionDictionary {
+        dictionary: Dictionary {
+            terms: vec!["Personnavn".to_owned()],
+            replacements: vec![Replacement {
+                from: "hello".to_owned(),
+                to: "hej verden".to_owned(),
+            }],
+        },
+        max_terms: 1,
+        max_chars: 40,
+        enabled: true,
+    };
     for model in [
         crate::cloud_api::HVISKE_V53,
         crate::cloud_api::HVISKE_V6,
@@ -103,26 +135,37 @@ fn hviske_uses_danish_without_a_free_text_decoder_prompt() {
             timeout_ms: 2_000,
             api_key: String::new(),
         };
-        let backend = CloudTranscribeBackend::new_with_provider(config, "custom")
+        let backend = build_cloud_backend(config, &dictionary, true, "custom")
+            .unwrap()
             .with_transcription_guards(TranscriptionGuards::from_lookup(|_| None));
-        let pcm: Vec<_> = [0.001_f32, 0.5, 0.001, 0.5, 0.001, 0.5]
-            .into_iter()
-            .flat_map(|amp| std::iter::repeat_n(amp, 480))
-            .collect();
-
-        let result = backend.transcribe(&pcm, 16_000).unwrap();
+        let report = transcribe_path(
+            &wav,
+            ConfiguredBackend::Cloud,
+            &backend,
+            model,
+            &dictionary,
+            &mut settings_from_env_with(|_| None),
+        )
+        .unwrap();
         let (headers, body) = server.join().unwrap();
         let body = String::from_utf8_lossy(&body);
 
         assert!(headers.starts_with("POST /v1/audio/transcriptions "));
         assert!(body.contains(&format!("name=\"model\"\r\n\r\n{model}\r\n")));
+        assert_eq!(report.raw_text, "hello");
+        assert_eq!(report.text, "hej verden");
+        assert_eq!(report.dictionary_replacements[0].count, 1);
         if model == "other-model" {
             assert!(body.contains("name=\"language\"\r\n\r\nen\r\n"));
-            assert!(body.contains("name=\"prompt\"\r\n\r\nFixture vocabulary\r\n"));
+            assert!(body
+                .contains("name=\"prompt\"\r\n\r\nFixture vocabulary\nVocabulary: Personnavn\r\n"));
+            assert_eq!(report.dictionary_terms, ["Personnavn"]);
         } else {
             assert!(body.contains("name=\"language\"\r\n\r\nda\r\n"));
             assert!(!body.contains("name=\"prompt\""));
-            assert_eq!(result.language, "da");
+            assert!(!body.contains("Personnavn"));
+            assert!(report.dictionary_terms.is_empty());
+            assert_eq!(report.language, "da");
         }
     }
 }
