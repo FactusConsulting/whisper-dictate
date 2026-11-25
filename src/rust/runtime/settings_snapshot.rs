@@ -26,10 +26,11 @@ pub(crate) const CREDENTIAL_ENV_NAMES: [&str; 5] = [
     POST_API_KEY_ENDPOINT_ENV,
 ];
 
-const COMPAT_BOUNDARY_ENV_NAMES: [&str; 3] = [
+const COMPAT_BOUNDARY_ENV_NAMES: [&str; 4] = [
     "VOICEPI_WHISPER_MODEL_PATH",
     crate::whisper::IDLE_UNLOAD_ENV,
     crate::whisper::GPU_ENV,
+    crate::whisper::NO_TIMESTAMPS_ENV,
 ];
 
 #[derive(Clone, Default, PartialEq, Eq)]

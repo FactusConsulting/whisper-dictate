@@ -257,15 +257,16 @@ impl IdleUnloadingModel<LocalWhisper> {
         Self::new(move || LocalWhisper::new(&model_path), idle_timeout)
     }
 
-    /// Build a lazy model whose accelerator policy is session-owned.
+    /// Build a lazy model with session-owned accelerator and decode options.
     #[cfg(native_session)]
     pub(crate) fn for_local_whisper_with_policy(
         model_path: std::path::PathBuf,
         idle_timeout: Option<Duration>,
         policy: crate::whisper::GpuPolicy,
+        no_timestamps: bool,
     ) -> Self {
         Self::new(
-            move || LocalWhisper::with_policy(&model_path, policy),
+            move || LocalWhisper::with_policy(&model_path, policy, no_timestamps),
             idle_timeout,
         )
     }

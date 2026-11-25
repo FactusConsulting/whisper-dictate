@@ -52,8 +52,8 @@ use whisper_rs::{
     get_lang_str, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
 };
 
-use super::accel;
 use super::gpu::{self, GpuPolicy};
+use super::{accel, NO_TIMESTAMPS_ENV};
 
 /// Failure envelope returned by [`LocalWhisper::load_catch_unwind`].
 ///
@@ -128,40 +128,34 @@ impl std::fmt::Display for LoadFailure {
 /// concurrent inference yet).
 pub struct LocalWhisper {
     ctx: WhisperContext,
+    no_timestamps: bool,
 }
 
 impl LocalWhisper {
-    /// Load a GGML whisper.cpp model from disk, picking GPU vs CPU according
-    /// to `VOICEPI_WHISPER_GPU` (see [`super::gpu::GPU_ENV`]).
+    /// Load a GGML model, taking GPU policy from [`super::gpu::GPU_ENV`].
+    /// `VOICEPI_WHISPER_NO_TIMESTAMPS` opts in to disabling timestamp
+    /// generation for models trained without it.
     ///
-    /// `model_path` should point to a file such as `ggml-small.en.bin` from
-    /// the [ggerganov/whisper.cpp releases]. The effective `use_gpu` is the
-    /// product of three things: the env-var policy, the compiled-in backend
-    /// feature (`whisper-rs-vulkan`), and the resolution
-    /// rules in [`super::gpu::should_use_gpu`].
-    ///
-    /// For deterministic tests use [`Self::with_policy`] which takes the
-    /// policy explicitly instead of reading the env.
+    /// Use [`Self::with_policy`] to pass both settings explicitly.
     ///
     /// **Only GGML is supported.** whisper.cpp has not yet picked up
     /// llama.cpp's GGUF container, so a GGUF file is rejected up front by a
     /// magic-bytes check rather than failing with a cryptic FFI error.
-    ///
-    /// [ggerganov/whisper.cpp releases]: https://huggingface.co/ggerganov/whisper.cpp
     pub fn new(model_path: &Path) -> Result<Self> {
         let policy = gpu::parse_gpu_policy_from_env()?;
-        Self::with_policy(model_path, policy)
+        let no_timestamps =
+            crate::privacy::truthy(std::env::var(NO_TIMESTAMPS_ENV).ok().as_deref());
+        Self::with_policy(model_path, policy, no_timestamps)
     }
 
-    /// Load a GGML whisper.cpp model with an explicit [`GpuPolicy`].
+    /// Load a GGML model with an explicit GPU policy and timestamp decode mode.
     ///
-    /// Bypasses the env-var read in [`Self::new`] so tests and callers that
-    /// already know the desired policy can pin it. The same compiled-in
-    /// feature gate from [`super::gpu::should_use_gpu`] still applies, so a
+    /// Bypasses the environment reads in [`Self::new`]. The same compiled-in
+    /// feature gate from [`super::gpu::should_use_gpu`] applies, so a
     /// `Vulkan` policy on a build without `whisper-rs-vulkan` silently falls
     /// back to CPU rather than erroring (matching the runtime "best effort"
     /// promise of the env-var path).
-    pub fn with_policy(model_path: &Path, policy: GpuPolicy) -> Result<Self> {
+    pub fn with_policy(model_path: &Path, policy: GpuPolicy, no_timestamps: bool) -> Result<Self> {
         if !model_path.is_file() {
             return Err(anyhow!(
                 "whisper model file not found: {}",
@@ -217,7 +211,7 @@ impl LocalWhisper {
             observer.resolved().as_str(),
             observer.planned().as_str()
         );
-        Ok(Self { ctx })
+        Ok(Self { ctx, no_timestamps })
     }
 
     /// Load a GGML whisper.cpp model with a caught unwind around the
@@ -353,6 +347,7 @@ impl LocalWhisper {
         params.set_print_progress(false);
         params.set_print_realtime(false);
         params.set_print_timestamps(false);
+        params.set_no_timestamps(self.no_timestamps);
         // Translation is an opt-in Whisper task. Pin transcription even when
         // auto-detection is enabled, so the output stays in the spoken language.
         params.set_translate(false);

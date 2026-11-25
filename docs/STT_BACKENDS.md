@@ -24,6 +24,29 @@ include the native local backend; source builds need the `whisper-rs-local`
 Cargo feature. The model is loaded lazily and can be released after an idle
 period with `VOICEPI_WHISPER_IDLE_UNLOAD_S`; the next utterance reloads it.
 
+### Use an Edda model from a local file
+
+If you have an Edda GGML file, select the local Whisper engine and set the
+model path, Danish language, and no-timestamps decoding explicitly. Edda is
+not an app catalog download or preset. Exit the running app first, then set
+these variables and launch it from the same PowerShell session:
+
+```powershell
+$env:VOICEPI_STT_BACKEND = 'whisper'
+$env:VOICEPI_WHISPER_MODEL_PATH = 'C:\models\ggml-edda-v0.2-f16.bin'
+$env:VOICEPI_WHISPER_NO_TIMESTAMPS = '1'
+$env:VOICEPI_LANG = 'da'
+wd ui
+```
+
+Use the path to your own GGML file. `VOICEPI_WHISPER_NO_TIMESTAMPS=1`
+disables timestamp generation during local decoding, not just timestamp
+display. There is no automatic Edda detection or model-type check for this
+option: it applies to any local Whisper model loaded by that process.
+Default decoding is unchanged when the variable is unset. When switching
+back to a built-in model, remove the model path and no-timestamps variables
+from the launch shell, restore your language setting, and restart the app.
+
 ## In-process Nemotron
 
 The shipping Rust build includes a dynamic adapter for NVIDIA's official

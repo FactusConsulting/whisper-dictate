@@ -68,6 +68,9 @@ pub use idle::{parse_idle_timeout_from_env, IdleUnloadingModel, IDLE_UNLOAD_ENV}
 pub use protocol::{ServerReady, TranscribeRequest, TranscribeResponse};
 pub use wav::{decode_wav_16k_mono, WHISPER_SAMPLE_RATE_HZ};
 
+/// Opt in to decoding without timestamp tokens in local Whisper.
+pub(crate) const NO_TIMESTAMPS_ENV: &str = "VOICEPI_WHISPER_NO_TIMESTAMPS";
+
 // Re-export the model-path resolver to the in-process Rust-session
 // sink so the sink applies the same env-var / cache
 // lookup as the subprocess dispatcher. Gated on the SAME feature pair

@@ -504,8 +504,13 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                         Some(&settings.device),
                     )
                     .map_err(|e| format!("GPU policy: {e:#}"))?;
+                    let no_timestamps =
+                        crate::privacy::truthy(runtime.value(crate::whisper::NO_TIMESTAMPS_ENV));
                     let model = IdleUnloadingModel::for_local_whisper_with_policy(
-                        model_path, idle, gpu_policy,
+                        model_path,
+                        idle,
+                        gpu_policy,
+                        no_timestamps,
                     );
                     let config = whisper_backend_config_with(&lookup);
                     Ok(WhisperLocalTranscribeBackend::new(model, config)
