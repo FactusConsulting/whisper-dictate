@@ -1,4 +1,4 @@
-use super::*;
+use super::{egui, WhisperDictateApp};
 
 #[derive(Clone, Copy)]
 struct HviskeModel {

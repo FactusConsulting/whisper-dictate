@@ -335,3 +335,6 @@ fn shared_construction_rejects_cuda_without_a_pinned_runtime() {
     .expect_err("CUDA must be rejected when this target has no pinned runtime");
     assert!(error.to_string().contains("not supported"));
 }
+
+#[path = "nemotron_gpu_tests.rs"]
+mod gpu;

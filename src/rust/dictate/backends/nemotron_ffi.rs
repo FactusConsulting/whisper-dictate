@@ -16,6 +16,10 @@ use libloading::Library;
 
 use super::nemotron_assets::{Accelerator, VerifiedRuntime};
 
+#[path = "nemotron_gpu_registry.rs"]
+mod gpu_registry;
+use gpu_registry::GpuRegistry;
+
 type RawRecognizer = c_void;
 type RawResult = c_void;
 
@@ -196,72 +200,15 @@ impl NativeRuntime {
     pub(super) fn select_gpu(
         &self,
         required_mib: u32,
-        mut capacity: impl FnMut(&CStr) -> Option<(u32, u32)>,
+        capacity: impl FnMut(&CStr) -> Option<(u32, u32)>,
     ) -> Result<i32> {
-        type Dev = *mut c_void;
-        type DevCount = unsafe extern "C" fn() -> usize;
-        type DevGet = unsafe extern "C" fn(usize) -> Dev;
-        type DevType = unsafe extern "C" fn(Dev) -> std::ffi::c_int;
-        type DevString = unsafe extern "C" fn(Dev) -> *const c_char;
-        type DevReg = unsafe extern "C" fn(Dev) -> *mut c_void;
-        const GPU: std::ffi::c_int = 1;
-        const IGPU: std::ffi::c_int = 2;
-
         // On Unix dlsym on the ASR handle also searches its dependencies.
         #[cfg(not(windows))]
         let (registry, base) = (&self.api._library, &self.api._library);
         #[cfg(windows)]
         let (registry, base) = (&self.registry, &self.base);
 
-        let count: DevCount = unsafe { symbol(registry, b"ggml_backend_dev_count\0")? };
-        let get: DevGet = unsafe { symbol(registry, b"ggml_backend_dev_get\0")? };
-        let kind: DevType = unsafe { symbol(base, b"ggml_backend_dev_type\0")? };
-        let description: DevString = unsafe { symbol(base, b"ggml_backend_dev_description\0")? };
-        let device_registry: DevReg = unsafe { symbol(base, b"ggml_backend_dev_backend_reg\0")? };
-        let registry_name: DevString = unsafe { symbol(base, b"ggml_backend_reg_name\0")? };
-
-        let mut best: Option<(u32, i32)> = None;
-        let mut gpu_index = 0_i32;
-        for index in 0..unsafe { count() } {
-            let device = unsafe { get(index) };
-            if device.is_null() || !matches!(unsafe { kind(device) }, GPU | IGPU) {
-                continue;
-            }
-            let index = gpu_index;
-            gpu_index += 1;
-            let reg = unsafe { device_registry(device) };
-            if reg.is_null() {
-                continue;
-            }
-            let backend = unsafe { registry_name(reg) };
-            if backend.is_null()
-                || !unsafe { CStr::from_ptr(backend) }
-                    .to_bytes()
-                    .eq_ignore_ascii_case(self.accelerator.label().as_bytes())
-            {
-                continue;
-            }
-            let description = unsafe { description(device) };
-            if description.is_null() {
-                continue;
-            }
-            let Some((total_mib, free_mib)) = capacity(unsafe { CStr::from_ptr(description) })
-            else {
-                continue;
-            };
-            if total_mib >= required_mib
-                && free_mib >= required_mib
-                && best.is_none_or(|(best_free, _)| free_mib > best_free)
-            {
-                best = Some((free_mib, index));
-            }
-        }
-        best.map(|(_, index)| index).ok_or_else(|| {
-            anyhow!(
-                "the verified Nemotron {} runtime has no identifiable GPU with {required_mib} MiB total and free VRAM",
-                self.accelerator.label()
-            )
-        })
+        GpuRegistry::load(registry, base)?.select(self.accelerator, required_mib, capacity)
     }
 
     pub(super) fn recognize_with(self, model_path: &Path, gpu: i32) -> Result<NativeRecognizer> {

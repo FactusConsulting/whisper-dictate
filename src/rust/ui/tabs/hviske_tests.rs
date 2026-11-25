@@ -1,5 +1,5 @@
-use super::*;
-use crate::ui::test_support::test_app;
+use super::{egui, WhisperDictateApp};
+use crate::ui::{test_support::test_app, AppSettings};
 
 fn collect_text(shape: &egui::Shape, painted: &mut Vec<(String, egui::Pos2)>) {
     match shape {

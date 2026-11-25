@@ -70,7 +70,7 @@ fn raw_dictionary_phrases_are_used_without_a_prompt() {
 #[cfg(any(windows, target_os = "linux"))]
 #[test]
 fn fixture_library_exercises_the_dynamic_abi_end_to_end() {
-    use super::{NativeApi, NativeRecognizer};
+    use super::{Accelerator, NativeApi, NativeRecognizer, NativeRuntime};
 
     let directory = tempfile::tempdir().expect("temporary native ABI fixture directory");
     let library = super::build_fixture_library(directory.path());
@@ -83,9 +83,26 @@ fn fixture_library_exercises_the_dynamic_abi_end_to_end() {
         .expect("the adapter itself rejects CPU");
     assert!(error.to_string().contains("CPU inference is not allowed"));
 
-    let api = NativeApi::load(&library).expect("load native fixture library");
-    let recognizer =
-        NativeRecognizer::create(api, &model, 0).expect("load fixture native recognizer");
+    let runtime = NativeRuntime {
+        api: NativeApi::load(&library).expect("load native fixture library"),
+        accelerator: Accelerator::Vulkan,
+        #[cfg(windows)]
+        registry: unsafe { super::load_native_library(&library) }.expect("open fixture registry"),
+        #[cfg(windows)]
+        base: unsafe { super::load_native_library(&library) }.expect("open fixture base library"),
+    };
+    let error = runtime
+        .select_gpu(2048, |_| {
+            panic!("no capacity probe without registry symbols")
+        })
+        .expect_err("the ASR ABI alone cannot identify a GPU");
+    assert!(error
+        .to_string()
+        .contains("missing NeMo-Speech.cpp runtime symbol"));
+
+    let recognizer = runtime
+        .recognize_with(&model, 0)
+        .expect("load fixture native recognizer");
     let result = recognizer
         .recognize(
             &[0.2, -0.2],
@@ -102,4 +119,60 @@ fn fixture_library_exercises_the_dynamic_abi_end_to_end() {
         .recognize(&[], 16_000, "en-US", None, &[])
         .expect_err("fixture rejects empty audio");
     assert!(error.to_string().contains("fixture native error"));
+
+    assert_partial_and_missing_results(&library, &model);
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+fn assert_partial_and_missing_results(library: &std::path::Path, model: &std::path::Path) {
+    use std::ffi::{c_char, c_void};
+    use std::ptr;
+    use std::sync::Arc;
+
+    use super::{NativeApi, NativeRecognizer, RecognitionOptions};
+
+    unsafe extern "C" fn missing_handle(
+        _: *mut c_void,
+        _: *const RecognitionOptions,
+        _: *const f32,
+        _: usize,
+        _: i32,
+        _: *mut *mut c_void,
+    ) -> i32 {
+        0
+    }
+
+    unsafe extern "C" fn missing_transcript(_: *const c_void, _: usize) -> *const c_char {
+        ptr::null()
+    }
+
+    unsafe extern "C" fn language_count(_: *const c_void, _: usize) -> usize {
+        2
+    }
+
+    unsafe extern "C" fn language(_: *const c_void, _: usize, index: usize) -> *const c_char {
+        if index == 1 {
+            c"da-DK".as_ptr()
+        } else {
+            ptr::null()
+        }
+    }
+
+    let mut api = NativeApi::load(library).expect("load native fixture library");
+    api.result_transcript = missing_transcript;
+    api.result_language_count = language_count;
+    api.result_language_code = language;
+    let mut recognizer =
+        NativeRecognizer::create(api, model, 0).expect("load fixture native recognizer");
+    let result = recognizer
+        .recognize(&[0.2], 16_000, "auto", None, &[])
+        .expect("missing output fields do not invalidate the handle");
+    assert!(result.text.is_empty());
+    assert_eq!(result.language.as_deref(), Some("da-DK"));
+
+    Arc::get_mut(&mut recognizer.api).unwrap().recognize = missing_handle;
+    let error = recognizer
+        .recognize(&[0.2], 16_000, "auto", None, &[])
+        .expect_err("success status must still provide a result handle");
+    assert!(error.to_string().contains("null recognition result"));
 }

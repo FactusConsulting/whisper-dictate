@@ -20,6 +20,9 @@ fn verified_model_and_runtime_cache_survive_a_process_restart() {
             ])
             .env("VOICEPI_TEST_NEMOTRON_CACHE_ROOT", directory.path())
             .env("VOICEPI_TEST_NEMOTRON_CACHE_PHASE", phase)
+            .env("LOCALAPPDATA", directory.path())
+            .env("XDG_CACHE_HOME", directory.path())
+            .env("HOME", directory.path())
             .output()
             .expect("run fresh asset-cache process");
         assert!(
@@ -43,9 +46,13 @@ fn model_and_runtime_cache_child() {
     assert!(matches!(phase.as_str(), "seed" | "reuse"));
     let root = std::path::Path::new(&root);
     let model_path = root.join("models/fixture.gguf");
-    let runtime_root = root.join("runtime");
-    let library = runtime_root.join("bin").join(runtime_library_filename());
-    let archive = root.join("runtime.zip");
+    let accelerator = Accelerator::Vulkan;
+    let runtime_asset = runtime_asset(accelerator.label());
+    let (runtime_root, archive) = runtime_paths(runtime_asset).unwrap();
+    let library = runtime_root
+        .join("bin")
+        .join(runtime_asset.library_filename);
+    let other_library = root.join(runtime_asset.library_filename);
     let model_bytes = b"restart-persistent model fixture";
     let library_bytes = b"restart-persistent runtime fixture";
     let model_sha256 = Box::leak(sha256_hex(model_bytes).into_boxed_str());
@@ -55,17 +62,12 @@ fn model_and_runtime_cache_child() {
         sha256: model_sha256,
         size_bytes: model_bytes.len() as u64,
     };
-    let runtime_asset = RuntimeAsset {
-        filename: "runtime.zip",
-        url: "https://invalid.example/runtime.zip",
-        sha256: "fixture-archive-sha",
-        library_filename: runtime_library_filename(),
-    };
     if phase == "seed" {
         fs::create_dir_all(model_path.parent().unwrap()).unwrap();
         fs::create_dir_all(library.parent().unwrap()).unwrap();
         fs::write(&model_path, model_bytes).unwrap();
         fs::write(&library, library_bytes).unwrap();
+        fs::write(&other_library, library_bytes).unwrap();
         write_runtime_verification_marker(&runtime_root, &library, runtime_asset.sha256).unwrap();
     }
     let active = AtomicBool::new(true);
@@ -73,10 +75,25 @@ fn model_and_runtime_cache_child() {
         ensure_model_asset_at(&model_path, model_asset, true, &active).unwrap(),
         model_path
     );
-    assert_eq!(
-        ensure_runtime_asset_at(&runtime_root, &archive, runtime_asset, true, &active).unwrap(),
-        library
-    );
+    if accelerator.available() {
+        let resolved = ensure_verified_runtime(None, accelerator, true, &active).unwrap();
+        assert_eq!(resolved.path(), library);
+        assert_eq!(resolved.accelerator(), accelerator);
+        let explicit =
+            ensure_verified_runtime(library.to_str(), accelerator, true, &active).unwrap();
+        assert_eq!(explicit.path(), library);
+        let Err(error) =
+            ensure_verified_runtime(other_library.to_str(), accelerator, true, &active)
+        else {
+            panic!("a library outside the pinned cache must not be loaded");
+        };
+        assert!(error.to_string().contains("not the verified"));
+    } else {
+        assert_eq!(
+            ensure_runtime_asset_at(&runtime_root, &archive, runtime_asset, true, &active).unwrap(),
+            library
+        );
+    }
     assert_eq!(fs::read(&model_path).unwrap(), model_bytes);
     assert_eq!(fs::read(&library).unwrap(), library_bytes);
 }
@@ -139,6 +156,17 @@ fn existing_explicit_model_path_wins_even_when_its_filename_is_official() {
         model_path_for_request(&path.display().to_string()).unwrap(),
         path
     );
+}
+
+#[test]
+fn direct_nemotron_models_use_file_size_instead_of_the_managed_model_floor() {
+    let directory = tempdir().unwrap();
+    let path = directory.path().join("custom.gguf");
+    let request = path.to_str().unwrap();
+    assert!(custom_model_size(request, &path).is_err());
+    fs::write(&path, b"fixture").unwrap();
+    assert_eq!(custom_model_size(request, &path).unwrap(), 7);
+    assert_eq!(custom_model_size(NEMOTRON_MULTI_MODEL, &path).unwrap(), 0);
 }
 
 #[test]

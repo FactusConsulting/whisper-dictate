@@ -355,15 +355,23 @@ impl GpuCapacity {
 
 /// Maximum total memory among devices the pinned local runtime can try.
 pub(crate) fn local_gpu_total_mib(adapters: &Adapters) -> Option<u32> {
+    max_local_gpu_total_mib(driver_enabled, || adapters.max_total_mib(), query_gpus)
+}
+
+fn max_local_gpu_total_mib(
+    enabled: impl Fn(Accelerator) -> bool,
+    vulkan_total: impl FnOnce() -> u32,
+    cuda_gpus: impl FnOnce() -> Vec<GpuInfo>,
+) -> Option<u32> {
     let vulkan = Accelerator::Vulkan;
-    let vulkan_mib = if vulkan.available() && driver_enabled(vulkan) {
-        adapters.max_total_mib()
+    let vulkan_mib = if vulkan.available() && enabled(vulkan) {
+        vulkan_total()
     } else {
         0
     };
     let cuda = Accelerator::Cuda;
-    let cuda_mib = if cuda.available() && driver_enabled(cuda) {
-        query_gpus()
+    let cuda_mib = if cuda.available() && enabled(cuda) {
+        cuda_gpus()
             .into_iter()
             .map(|gpu| gpu.total_mb)
             .max()
@@ -376,13 +384,20 @@ pub(crate) fn local_gpu_total_mib(adapters: &Adapters) -> Option<u32> {
 }
 
 fn driver_enabled(accelerator: Accelerator) -> bool {
-    match accelerator {
-        Accelerator::Vulkan => {
-            !std::env::var_os("GGML_VK_VISIBLE_DEVICES").is_some_and(|value| value.is_empty())
-        }
-        Accelerator::Cuda => !std::env::var_os("CUDA_VISIBLE_DEVICES")
-            .is_some_and(|value| value.is_empty() || value == "-1"),
-    }
+    driver_enabled_with(accelerator, std::env::var_os)
+}
+
+fn driver_enabled_with(
+    accelerator: Accelerator,
+    lookup: impl FnOnce(&'static str) -> Option<std::ffi::OsString>,
+) -> bool {
+    let variable = match accelerator {
+        Accelerator::Vulkan => "GGML_VK_VISIBLE_DEVICES",
+        Accelerator::Cuda => "CUDA_VISIBLE_DEVICES",
+    };
+    !lookup(variable).is_some_and(|value| {
+        value.is_empty() || (accelerator == Accelerator::Cuda && value == "-1")
+    })
 }
 
 fn cuda_capacity(gpus: &[GpuInfo], description: &[u8]) -> Option<(u32, u32)> {
@@ -397,6 +412,34 @@ fn cuda_capacity(gpus: &[GpuInfo], description: &[u8]) -> Option<(u32, u32)> {
 fn load_native_recognizer(
     config: &NemotronLocalBackendConfig,
 ) -> Result<(NativeRecognizer, &'static str)> {
+    load_recognizer_with(
+        config,
+        driver_enabled,
+        GpuCapacity::probe,
+        |accelerator| {
+            let verified = ensure_verified_runtime(
+                config.library_override.as_deref(),
+                accelerator,
+                config.local_only,
+                config.runtime_active.as_ref(),
+            )?;
+            NativeRuntime::load(&verified)
+        },
+        |runtime, required_mib, capacity| {
+            runtime.select_gpu(required_mib, |name| capacity.capacity(name))
+        },
+        NativeRuntime::recognize_with,
+    )
+}
+
+fn load_recognizer_with<R, T>(
+    config: &NemotronLocalBackendConfig,
+    enabled: impl Fn(Accelerator) -> bool,
+    mut probe: impl FnMut(Accelerator) -> GpuCapacity,
+    mut load_runtime: impl FnMut(Accelerator) -> Result<R>,
+    select_gpu: impl Fn(&R, u32, &GpuCapacity) -> Result<i32>,
+    mut create: impl FnMut(R, &Path, i32) -> Result<T>,
+) -> Result<(T, &'static str)> {
     let planned_model = model_path_for_request(&config.model_request)?;
     let required_mib =
         nemotron_required_mib(custom_model_size(&config.model_request, &planned_model)?);
@@ -405,25 +448,18 @@ fn load_native_recognizer(
         if !config.runtime_active.load(Ordering::Acquire) {
             anyhow::bail!("loading local Nemotron was cancelled because the runtime stopped");
         }
-        if !accelerator.available() || !driver_enabled(accelerator) {
+        if !accelerator.available() || !enabled(accelerator) {
             continue;
         }
-        let capacity = GpuCapacity::probe(accelerator);
+        let capacity = probe(accelerator);
         if !capacity.has_capacity(required_mib) {
             continue;
         }
-        let try_runtime = || -> Result<NativeRuntime> {
-            let verified = ensure_verified_runtime(
-                config.library_override.as_deref(),
-                accelerator,
-                config.local_only,
-                config.runtime_active.as_ref(),
-            )?;
-            let runtime = NativeRuntime::load(&verified)?;
-            runtime.select_gpu(required_mib, |name| capacity.capacity(name))?;
+        let runtime = load_runtime(accelerator).and_then(|runtime| {
+            select_gpu(&runtime, required_mib, &capacity)?;
             Ok(runtime)
-        };
-        let runtime = match try_runtime() {
+        });
+        let runtime = match runtime {
             Ok(runtime) => runtime,
             Err(error) => {
                 failure = Some(error);
@@ -440,17 +476,16 @@ fn load_native_recognizer(
         }
         let required_mib =
             nemotron_required_mib(custom_model_size(&config.model_request, &model_path)?);
-        let capacity = GpuCapacity::probe(accelerator);
-        let try_recognizer = || -> Result<NativeRecognizer> {
-            let gpu = runtime.select_gpu(required_mib, |name| capacity.capacity(name))?;
-            runtime.recognize_with(&model_path, gpu).with_context(|| {
+        let capacity = probe(accelerator);
+        let recognizer = select_gpu(&runtime, required_mib, &capacity).and_then(|gpu| {
+            create(runtime, &model_path, gpu).with_context(|| {
                 format!(
                     "initialize local Nemotron on {} GPU {gpu}",
                     accelerator.label()
                 )
             })
-        };
-        match try_recognizer() {
+        });
+        match recognizer {
             Ok(recognizer) => return Ok((recognizer, accelerator.label())),
             Err(error) => failure = Some(error),
         }
@@ -460,10 +495,10 @@ fn load_native_recognizer(
             "local Nemotron requires a verified GPU runtime and one GPU with at least {required_mib} MiB total and free VRAM; choose a hosted speech provider if no suitable GPU is available"
         )
     };
-    Err(match failure {
-        Some(error) => error.context(message()),
-        None => anyhow::anyhow!(message()),
-    })
+    match failure {
+        Some(error) => Err(error).with_context(message),
+        None => Err(anyhow::anyhow!(message())),
+    }
 }
 
 #[cfg(test)]

@@ -201,10 +201,10 @@ impl Accelerator {
     }
 
     pub(super) const fn available(self) -> bool {
-        use crate::whisper::device_options::*;
+        use crate::whisper::device_options;
         match self {
-            Self::Vulkan => nemotron_vulkan_runtime_available(),
-            Self::Cuda => nemotron_cuda_runtime_available(),
+            Self::Vulkan => device_options::nemotron_vulkan_runtime_available(),
+            Self::Cuda => device_options::nemotron_cuda_runtime_available(),
         }
     }
 }

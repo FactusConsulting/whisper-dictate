@@ -2,9 +2,11 @@
 
 use std::ffi::CStr;
 
-use ash::{vk, Entry, Instance};
+use ash::vk;
 
 use super::{SpeechGpu, MIB};
+
+mod native;
 
 pub(crate) struct Adapters(Vec<Adapter>);
 
@@ -15,56 +17,6 @@ struct Adapter {
 }
 
 impl Adapters {
-    /// Query only physical devices, without opening a logical device or
-    /// allocating GPU memory. A missing loader or driver yields no devices.
-    pub(crate) fn probe() -> Self {
-        // SAFETY: Keep the Vulkan loader alive until the instance has
-        // been destroyed. The probe does not return any Vulkan handles.
-        unsafe {
-            let Ok(entry) = Entry::load() else {
-                return Self(Vec::new());
-            };
-            let Ok(Some(api_version)) = entry.try_enumerate_instance_version() else {
-                return Self(Vec::new());
-            };
-            if api_version < vk::API_VERSION_1_2 {
-                return Self(Vec::new());
-            }
-            let app = vk::ApplicationInfo::default()
-                .application_name(c"ggml-vulkan")
-                .application_version(1)
-                .api_version(api_version);
-            let info = vk::InstanceCreateInfo::default().application_info(&app);
-            #[cfg(target_os = "macos")]
-            let extensions = [ash::khr::portability_enumeration::NAME.as_ptr()];
-            #[cfg(target_os = "macos")]
-            let info = if entry
-                .enumerate_instance_extension_properties(None)
-                .is_ok_and(|exts| {
-                    supports_extension(&exts, ash::khr::portability_enumeration::NAME)
-                }) {
-                info.enabled_extension_names(&extensions)
-                    .flags(vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR)
-            } else {
-                info
-            };
-            let Ok(instance) = entry.create_instance(&info, None) else {
-                return Self(Vec::new());
-            };
-            let adapters = instance.enumerate_physical_devices().map_or_else(
-                |_| Vec::new(),
-                |devices| {
-                    devices
-                        .into_iter()
-                        .filter_map(|device| Adapter::probe(&instance, device))
-                        .collect()
-                },
-            );
-            instance.destroy_instance(None);
-            Self(adapters)
-        }
-    }
-
     pub(crate) fn max_total_mib(&self) -> u32 {
         self.0
             .iter()
@@ -183,65 +135,27 @@ impl Adapters {
     }
 }
 
-impl Adapter {
-    /// SAFETY: `device` must have been enumerated from `instance`.
-    unsafe fn probe(instance: &Instance, device: vk::PhysicalDevice) -> Option<Self> {
-        // SAFETY: Query a live physical device using the owning instance.
-        unsafe {
-            let properties = instance.get_physical_device_properties(device);
-            let description = Box::from(properties.device_name_as_c_str().ok()?);
-            let extensions = instance.enumerate_device_extension_properties(device).ok();
-            let supports = |name| {
-                extensions
-                    .as_ref()
-                    .is_some_and(|exts| supports_extension(exts, name))
-            };
-            let pci_bus = supports(ash::ext::pci_bus_info::NAME).then(|| {
-                let mut pci = vk::PhysicalDevicePCIBusInfoPropertiesEXT::default();
-                let mut properties = vk::PhysicalDeviceProperties2::default().push_next(&mut pci);
-                instance.get_physical_device_properties2(device, &mut properties);
-                [
-                    pci.pci_domain,
-                    pci.pci_bus,
-                    pci.pci_device,
-                    pci.pci_function,
-                ]
-            });
-            let capacity = if is_hardware_gpu(properties.device_type)
-                && properties.api_version >= vk::API_VERSION_1_2
-                && supports(ash::ext::memory_budget::NAME)
-            {
-                let mut vk11 = vk::PhysicalDeviceVulkan11Features::default();
-                let mut features = vk::PhysicalDeviceFeatures2::default().push_next(&mut vk11);
-                instance.get_physical_device_features2(device, &mut features);
-                let has_compute_queue = instance
-                    .get_physical_device_queue_family_properties(device)
-                    .iter()
-                    .any(|queue| {
-                        queue.queue_count > 0 && queue.queue_flags.contains(vk::QueueFlags::COMPUTE)
-                    });
-                if vk11.storage_buffer16_bit_access == vk::TRUE && has_compute_queue {
-                    let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
-                    let mut memory =
-                        vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget);
-                    instance.get_physical_device_memory_properties2(device, &mut memory);
-                    let memory_properties = memory.memory_properties;
-                    device_local_capacity(&memory_properties, &budget)
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            // Keep unsupported same-name devices in the inventory so
-            // their descriptors cannot be mistaken for hardware.
-            Some(Self {
-                description,
-                pci_bus,
-                capacity,
-            })
-        }
-    }
+fn supports_capacity_query(
+    properties: &vk::PhysicalDeviceProperties,
+    extensions: &[vk::ExtensionProperties],
+) -> bool {
+    is_hardware_gpu(properties.device_type)
+        && supports_api_version(properties.api_version)
+        && supports_extension(extensions, ash::ext::memory_budget::NAME)
+}
+
+fn supports_api_version(api_version: u32) -> bool {
+    api_version >= vk::API_VERSION_1_2
+}
+
+fn supports_compute(
+    storage_buffer16_bit_access: vk::Bool32,
+    queues: &[vk::QueueFamilyProperties],
+) -> bool {
+    storage_buffer16_bit_access == vk::TRUE
+        && queues.iter().any(|queue| {
+            queue.queue_count > 0 && queue.queue_flags.contains(vk::QueueFlags::COMPUTE)
+        })
 }
 
 fn is_hardware_gpu(device_type: vk::PhysicalDeviceType) -> bool {
@@ -309,6 +223,97 @@ mod tests {
     }
 
     #[test]
+    fn capacity_query_requires_vulkan_1_2_hardware_and_memory_budget_extension() {
+        let mut malformed = vk::ExtensionProperties::default();
+        malformed.extension_name.fill(1); // No NUL terminator.
+        let extensions = [
+            malformed,
+            vk::ExtensionProperties::default()
+                .extension_name(ash::ext::pci_bus_info::NAME)
+                .unwrap(),
+            vk::ExtensionProperties::default()
+                .extension_name(ash::ext::memory_budget::NAME)
+                .unwrap(),
+        ];
+        let mut properties = vk::PhysicalDeviceProperties {
+            device_type: vk::PhysicalDeviceType::INTEGRATED_GPU,
+            api_version: vk::API_VERSION_1_2,
+            ..Default::default()
+        };
+        assert!(supports_capacity_query(&properties, &extensions));
+        assert!(!supports_capacity_query(&properties, &extensions[..2]));
+        assert!(!supports_capacity_query(&properties, &[]));
+
+        properties.api_version = vk::API_VERSION_1_1;
+        assert!(!supports_capacity_query(&properties, &extensions));
+
+        properties.api_version = vk::API_VERSION_1_2;
+        properties.device_type = vk::PhysicalDeviceType::CPU;
+        assert!(!supports_capacity_query(&properties, &extensions));
+    }
+
+    #[test]
+    fn compute_requires_16_bit_storage_and_a_nonempty_compute_queue_family() {
+        let queues = [
+            vk::QueueFamilyProperties {
+                queue_count: 1,
+                queue_flags: vk::QueueFlags::GRAPHICS,
+                ..Default::default()
+            },
+            vk::QueueFamilyProperties {
+                queue_count: 0,
+                queue_flags: vk::QueueFlags::COMPUTE,
+                ..Default::default()
+            },
+            vk::QueueFamilyProperties {
+                queue_count: 1,
+                queue_flags: vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE,
+                ..Default::default()
+            },
+        ];
+        assert!(!supports_compute(vk::TRUE, &[]));
+        assert!(!supports_compute(vk::TRUE, &queues[..2]));
+        assert!(!supports_compute(vk::FALSE, &queues));
+        assert!(supports_compute(vk::TRUE, &queues));
+    }
+
+    #[test]
+    fn empty_inventory_exposes_no_whisper_gpus() {
+        let adapters = Adapters(Vec::new());
+        assert_eq!(adapters.max_total_mib(), 0);
+        assert!(adapters.whisper_gpus().is_empty());
+    }
+
+    #[cfg(feature = "nemotron-local")]
+    #[test]
+    fn capacity_uses_a_single_supported_adapter_without_pooling() {
+        let mut adapters = Adapters(vec![
+            Adapter {
+                description: c"Unsupported".into(),
+                pci_bus: None,
+                capacity: None,
+            },
+            Adapter {
+                description: c"Higher total".into(),
+                pci_bus: None,
+                capacity: Some((8192, 2048)),
+            },
+            Adapter {
+                description: c"Higher free".into(),
+                pci_bus: None,
+                capacity: Some((4096, 4096)),
+            },
+        ]);
+        assert_eq!(adapters.max_total_mib(), 8192);
+        assert!(adapters.has_capacity(4096));
+        assert!(!adapters.has_capacity(4097));
+
+        adapters.0.truncate(1);
+        assert_eq!(adapters.max_total_mib(), 0);
+        assert!(!adapters.has_capacity(0));
+    }
+
+    #[test]
     fn matches_duplicate_descriptions_by_pci_or_conservative_capacity() {
         let description = c"Duplicated Vulkan description";
         let mut adapters = Adapters(vec![
@@ -333,6 +338,15 @@ mod tests {
             Some((4096, 2000))
         );
         assert_eq!(adapters.capacity(description, Some(c"0000:03:00.0")), None);
+        assert_eq!(adapters.capacity(c"Different description", None), None);
+        for malformed in [
+            c"0000:02:00",
+            c"0000:02:00.0.1",
+            c"0000:0g:00.0",
+            c"0000:02:00.\xFF",
+        ] {
+            assert_eq!(adapters.capacity(description, Some(malformed)), None);
+        }
 
         adapters.0.push(Adapter {
             description: description.into(),
@@ -375,5 +389,31 @@ mod tests {
 
         properties.memory_heap_count = properties.memory_heaps.len() as u32 + 1;
         assert_eq!(device_local_capacity(&properties, &budget), None);
+    }
+
+    #[test]
+    fn device_local_budget_is_clamped_to_heap_size_before_usage_is_subtracted() {
+        let mut properties = vk::PhysicalDeviceMemoryProperties {
+            memory_heap_count: 1,
+            ..Default::default()
+        };
+        properties.memory_heaps[0] = vk::MemoryHeap {
+            size: 2 * MIB + MIB / 2,
+            flags: vk::MemoryHeapFlags::DEVICE_LOCAL,
+        };
+        let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
+        budget.heap_budget[0] = 4 * MIB;
+        budget.heap_usage[0] = MIB;
+        assert_eq!(device_local_capacity(&properties, &budget), Some((2, 1)));
+
+        properties.memory_heaps[0].size = MIB - 1;
+        assert_eq!(device_local_capacity(&properties, &budget), None);
+
+        properties.memory_heaps[0].size = u64::MAX;
+        budget.heap_budget[0] = u64::MAX;
+        assert_eq!(
+            device_local_capacity(&properties, &budget),
+            Some((u32::MAX, u32::MAX))
+        );
     }
 }

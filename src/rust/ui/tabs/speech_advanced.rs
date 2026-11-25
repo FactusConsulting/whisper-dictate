@@ -6,7 +6,89 @@
 
 use super::*;
 
+#[cfg(windows)]
+fn windows_shortcut_row(
+    ui: &mut egui::Ui,
+    palette: UiPalette,
+    label: &str,
+    shortcut: &mut String,
+    help: &str,
+    validate: impl FnOnce(&str) -> Result<(), String>,
+) {
+    text_help_short(ui, label, shortcut, help);
+    if shortcut.trim().is_empty() {
+        return;
+    }
+    let (message, color) = match validate(shortcut) {
+        Ok(()) => ("Shortcut syntax is valid".to_owned(), palette.ok_text),
+        Err(error) => (error, palette.warn_text),
+    };
+    ui.label("");
+    ui.label(egui::RichText::new(message).color(color));
+    ui.end_row();
+}
+
 impl WhisperDictateApp {
+    #[cfg(windows)]
+    pub(super) fn speech_windows_shortcut_rows(
+        &mut self,
+        ui: &mut egui::Ui,
+        mode: SettingsMode,
+        palette: UiPalette,
+    ) {
+        let settings = &mut self.settings;
+        if setting_visible(mode, "copy_last_hotkey") {
+            windows_shortcut_row(
+                ui,
+                palette,
+                "Copy last shortcut",
+                &mut settings.copy_last_hotkey,
+                "Optional Windows shortcut, such as ctrl+shift+f8. Copies the most recent local-history transcript without starting dictation. Leave blank to disable; restart the runtime after changing it.",
+                |shortcut| validate_copy_last_hotkey(shortcut, &settings.key, &settings.paste_last_hotkey),
+            );
+        }
+        if setting_visible(mode, "paste_last_hotkey") {
+            windows_shortcut_row(
+                ui,
+                palette,
+                "Paste last shortcut",
+                &mut settings.paste_last_hotkey,
+                "Optional Windows shortcut, such as ctrl+shift+f9. Re-injects the most recent local-history transcript into the focused window, including transcripts whose original injection failed. Leave blank to disable; restart the runtime after changing it.",
+                |shortcut| validate_paste_last_hotkey(shortcut, &settings.key, &settings.copy_last_hotkey),
+            );
+        }
+        if setting_visible(mode, "cycle_mode_hotkey") {
+            windows_shortcut_row(
+                ui,
+                palette,
+                "Cycle mode shortcut",
+                &mut settings.cycle_mode_hotkey,
+                "Optional Windows shortcut, such as ctrl+shift+f10. Rotates the post-processing mode through raw, clean, prompt, terminal, slack, email, and bullets, saves it, and reports the new mode on the runtime log. Leave blank to disable; restart the runtime after changing it.",
+                |shortcut| validate_mode_hotkey(shortcut, &settings.key, "cycle mode"),
+            );
+        }
+        if setting_visible(mode, "raw_mode_hotkey") {
+            windows_shortcut_row(
+                ui,
+                palette,
+                "Raw mode shortcut",
+                &mut settings.raw_mode_hotkey,
+                "Optional Windows shortcut, such as ctrl+shift+f11. Switches the post-processing mode to raw, saves it, and reports the change on the runtime log. Leave blank to disable; restart the runtime after changing it.",
+                |shortcut| validate_mode_hotkey(shortcut, &settings.key, "raw mode"),
+            );
+        }
+        if setting_visible(mode, "clean_mode_hotkey") {
+            windows_shortcut_row(
+                ui,
+                palette,
+                "Clean mode shortcut",
+                &mut settings.clean_mode_hotkey,
+                "Optional Windows shortcut, such as ctrl+shift+f6. Switches the post-processing mode to clean, saves it, and reports the change on the runtime log. Leave blank to disable; restart the runtime after changing it.",
+                |shortcut| validate_mode_hotkey(shortcut, &settings.key, "clean mode"),
+            );
+        }
+    }
+
     /// The "Device" row in the Speech → General group (`device`; advanced
     /// see the schema change in settings_schema.json for #settings-simple-mode).
     pub(in crate::ui) fn speech_device_row(
