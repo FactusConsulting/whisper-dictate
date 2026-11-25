@@ -46,12 +46,25 @@ cannot initialize it. The app reports the error rather than running on the
 CPU. The model is loaded lazily and can be released after an idle period with
 `VOICEPI_WHISPER_IDLE_UNLOAD_S`; the next utterance reloads it.
 
+### Danish Turbo and Danish Quality
+
+In **Speech → Local Whisper**, choose **Danish Turbo** (`edda-v0.2`) or
+**Danish Quality** (`edda-v0.2-large`), download the model, then save and
+restart the runtime. Start with Turbo for Danish dictation. Quality uses
+the full large-v3 model and requires more GPU memory. Neither model is
+downloaded or selected automatically.
+
+Both presets always transcribe in Danish, including preview and file
+transcription. The app does not overwrite your language setting. Choose a
+multilingual model to use it again. Both presets work offline once downloaded.
+
 ### Use an Edda model from a local file
 
 If you already have a compatible Edda GGML file, select local Whisper, set the
 device to Vulkan and language to Danish (`da`), and enable no-timestamps
-decoding explicitly. Edda is not an app catalog download or preset. Exit the
-running app first, then launch it from the same PowerShell session:
+decoding explicitly. A custom file takes precedence over any catalog preset
+and does not lock the language. Exit the running app first, then launch it
+from the same PowerShell session:
 
 ```powershell
 $env:VOICEPI_STT_BACKEND = 'whisper'

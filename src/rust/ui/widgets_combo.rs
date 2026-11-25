@@ -264,6 +264,7 @@ pub(in crate::ui) fn combo_model_vram(
     enabled: bool,
     label: &str,
     value: &mut String,
+    env_fallback: Option<&str>,
     models: &[&str],
     hint: fn(&str) -> (&'static str, u32),
     availability: impl Fn(&str) -> crate::ui::whisper_models_state::ModelAvailability,
@@ -271,15 +272,20 @@ pub(in crate::ui) fn combo_model_vram(
     help: &str,
 ) {
     let show_help = label_with_help_enabled(ui, enabled, label, help);
-    let (cur_note, _) = hint(value);
-    let current_availability = availability(value);
-    let selected_text = if value.is_empty() {
+    let current = env_fallback.unwrap_or(value).trim();
+    let (cur_note, _) = hint(current);
+    let current_availability = availability(current);
+    let current_label = whisper_model_display_name(current);
+    let selected_text = if current.is_empty() {
         "(empty)".to_owned()
     } else if cur_note.is_empty() {
-        format!("{value} — {}", model_download_status(current_availability))
+        format!(
+            "{current_label} — {}",
+            model_download_status(current_availability)
+        )
     } else {
         format!(
-            "{value} — {cur_note} — {}",
+            "{current_label} — {cur_note} — {}",
             model_download_status(current_availability)
         )
     };
@@ -292,15 +298,16 @@ pub(in crate::ui) fn combo_model_vram(
                     let (note, required_mib) = hint(model);
                     let availability = availability(model);
                     let fits = gpu_total_mb.is_some_and(|total| required_mib <= total);
+                    let model_label = whisper_model_display_name(model);
                     let display = if note.is_empty() {
-                        format!("{model} — {}", model_download_status(availability))
+                        format!("{model_label} — {}", model_download_status(availability))
                     } else {
                         format!(
-                            "{model} — {note} (~{required_mib} MiB) — {}",
+                            "{model_label} — {note} (~{required_mib} MiB) — {}",
                             model_download_status(availability)
                         )
                     };
-                    let selected = value.as_str() == *model;
+                    let selected = env_fallback.unwrap_or(value).trim() == *model;
                     // egui 0.34: `SelectableLabel::new(sel, text)` is replaced by
                     // `Button::selectable(sel, text)` (same selectable-row look).
                     let response =

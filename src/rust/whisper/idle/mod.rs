@@ -58,7 +58,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 
 #[cfg(feature = "whisper-rs-local")]
-use crate::whisper::LocalWhisper;
+use super::{dispatch::ResolvedModel, LocalWhisper};
 
 mod env;
 mod watcher;
@@ -243,30 +243,21 @@ impl<M: Send + 'static> IdleUnloadingModel<M> {
 
 #[cfg(feature = "whisper-rs-local")]
 impl IdleUnloadingModel<LocalWhisper> {
-    /// Convenience constructor for the production wiring: pin `M` to
-    /// [`LocalWhisper`] and build the loader from a model path.
-    ///
-    /// The model path is cloned into the closure so the wrapper owns its
-    /// load configuration outright — callers don't have to worry about
-    /// keeping the path buffer alive across the (unbounded) idle/reload
-    /// cycle.
-    pub fn for_local_whisper(
-        model_path: std::path::PathBuf,
-        idle_timeout: Option<Duration>,
-    ) -> Self {
-        Self::new(move || LocalWhisper::new(&model_path), idle_timeout)
+    /// Build a lazy model that retains its selection across idle unloads.
+    pub(crate) fn for_local_whisper(model: ResolvedModel, idle_timeout: Option<Duration>) -> Self {
+        Self::new(move || LocalWhisper::from_resolved(&model), idle_timeout)
     }
 
     /// Build a lazy model with session-owned accelerator and decode options.
     #[cfg(native_session)]
     pub(crate) fn for_local_whisper_with_policy(
-        model_path: std::path::PathBuf,
+        model: ResolvedModel,
         idle_timeout: Option<Duration>,
         policy: crate::whisper::GpuPolicy,
         no_timestamps: bool,
     ) -> Self {
         Self::new(
-            move || LocalWhisper::with_policy(&model_path, policy, no_timestamps),
+            move || LocalWhisper::from_resolved_with_policy(&model, policy, no_timestamps),
             idle_timeout,
         )
     }

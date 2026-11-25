@@ -112,6 +112,27 @@ fn explicit_clear_markers_reach_the_local_whisper_builder() {
     restore_all(previous);
 }
 
+#[cfg(feature = "whisper-rs-local")]
+#[test]
+fn local_whisper_benchmark_uses_the_resolved_model_over_the_shell_model() {
+    use crate::whisper::dispatch::{MODEL_NAME_ENV, MODEL_PATH_ENV};
+
+    let _guard = crate::test_env_lock::lock_env();
+    let previous = snapshot_clear(&[MODEL_PATH_ENV, MODEL_NAME_ENV]);
+    std::env::set_var(MODEL_NAME_ENV, "stale-shell-model");
+    let resolved = BTreeMap::from([(MODEL_NAME_ENV.to_owned(), "invalid-saved-model".to_owned())]);
+
+    let result = build_local_whisper_backend(&empty_dictionary(), &env_lookup(&resolved));
+    restore_all(previous);
+
+    let Err(NativeBenchError::Other(error)) = result else {
+        panic!("unknown saved model should fail");
+    };
+    assert!(error
+        .to_string()
+        .contains("unknown Whisper model `invalid-saved-model`"));
+}
+
 #[cfg(feature = "nemotron-local")]
 #[test]
 fn in_process_nemotron_benchmark_builds_the_local_backend() {

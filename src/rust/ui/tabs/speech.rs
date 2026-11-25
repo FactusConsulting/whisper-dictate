@@ -5,9 +5,9 @@ impl WhisperDictateApp {
     pub(in crate::ui) fn core_tab(&mut self, ui: &mut egui::Ui) {
         ui.heading("Speech recognition");
         let stock_model_fits = self.whisper_stock_model_fits();
-        let fitting_custom_bytes = self
-            .whisper_custom_model_bytes()
-            .filter(|bytes| self.whisper_model_fits(*bytes));
+        let fitting_custom_bytes = self.whisper_custom_model_bytes().filter(|bytes| {
+            self.whisper_model_fits(crate::model_capacity::whisper_required_mib(*bytes))
+        });
         let whisper_available = stock_model_fits || fitting_custom_bytes.is_some();
         let engines = if whisper_available {
             STT_BACKEND_OPTIONS
@@ -40,7 +40,8 @@ impl WhisperDictateApp {
 
         let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
         if backend == SttBackendMode::Whisper {
-            let capacity_warning = self.whisper_capacity_warning(&self.settings.model);
+            let capacity_warning =
+                self.whisper_capacity_warning(self.pending_whisper_model().trim());
             if self.cpu_speech_device_selected()
                 && (whisper_available || capacity_warning.is_none())
             {
@@ -96,6 +97,7 @@ impl WhisperDictateApp {
         let language = self.settings.ui_language.clone();
         let mode = SettingsMode::from_raw(&self.settings.ui_settings_mode);
         let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
+        let model_fallback = self.pending_whisper_model_env_fallback();
         let model_downloads = &self.whisper_model_downloads;
         scope_group(
             ui,
@@ -123,6 +125,7 @@ impl WhisperDictateApp {
                     backend == SttBackendMode::Whisper,
                     "Whisper model",
                     &mut self.settings.model,
+                    model_fallback.as_deref(),
                     &whisper_models,
                     whisper_model_hint,
                     |model| {
@@ -332,12 +335,14 @@ impl WhisperDictateApp {
         let nemotron_in_process = backend == SttBackendMode::Cloud
             && self.current_cloud_provider() == CloudProvider::Nemotron
             && crate::cloud_api::is_nemotron_in_process_endpoint(&self.settings.stt_base_url);
+        let whisper_entry = self.pending_whisper_model_entry();
         let whisper_device_available = backend == SttBackendMode::Whisper
             && (whisper_available
-                || (std::env::var_os(crate::ui::app::WHISPER_MODEL_PATH_ENV).is_none()
-                    && crate::whisper::model_manager::find(self.settings.model.trim())
-                        .is_some_and(|entry| self.whisper_model_fits(entry.size_bytes))));
+                || whisper_entry
+                    .is_some_and(|entry| self.whisper_model_fits(entry.required_gpu_mib())));
         let nemotron_device_available = nemotron_in_process && self.selected_nemotron_model_fits();
+        let fixed_danish = backend == SttBackendMode::Whisper
+            && whisper_entry.and_then(|entry| entry.fixed_language) == Some("da");
         scope_group(
             ui,
             palette,
@@ -373,7 +378,11 @@ impl WhisperDictateApp {
                     "Spoken language hint. Auto lets the backend autodetect when supported."
                 };
                 if setting_visible(mode, "lang") {
-                    if let Some(selected) = combo_help_labeled_short_selection(
+                    if fixed_danish {
+                        ui.label("Language");
+                        ui.label("Danish (fixed by model)");
+                        ui.end_row();
+                    } else if let Some(selected) = combo_help_labeled_short_selection(
                         ui,
                         "Language",
                         &mut self.settings.lang,

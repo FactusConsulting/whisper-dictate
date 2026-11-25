@@ -323,11 +323,10 @@ fn build_local_backend(dictionary: &SessionDictionary) -> Result<BuiltBackend> {
     use crate::dictate::backends::WhisperLocalTranscribeBackend;
     use crate::whisper::{parse_idle_timeout_from_env, IdleUnloadingModel};
 
-    let model_path = crate::whisper::dispatch::resolve_model_path_from_env()
-        .context("resolve local Whisper model")?;
-    let model_identity = model_path.display().to_string();
+    let model = crate::whisper::dispatch::resolve_model_from_env()?;
+    let model_identity = model.path.display().to_string();
     let idle = parse_idle_timeout_from_env().context("parse Whisper idle timeout")?;
-    let idle_model = IdleUnloadingModel::for_local_whisper(model_path, idle);
+    let idle_model = IdleUnloadingModel::for_local_whisper(model, idle);
     let language = nonempty_env("VOICEPI_LANG");
     let mut initial_prompt = nonempty_env("VOICEPI_INITIAL_PROMPT");
     initial_prompt = prompt_for(dictionary, initial_prompt.as_deref());

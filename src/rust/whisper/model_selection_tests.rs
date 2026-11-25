@@ -20,3 +20,23 @@ fn selected_model_must_exist_and_be_downloaded() {
     let unknown = select_downloaded_model(Some("not-a-model"), |_| true).unwrap_err();
     assert!(unknown.to_string().contains("unknown Whisper model"));
 }
+
+#[test]
+fn cached_edda_requires_explicit_selection_and_never_falls_back() {
+    for name in ["edda-v0.2", "edda-v0.2-large"] {
+        let only_edda = |entry: &ModelEntry| entry.name == name;
+        assert!(select_downloaded_model(None, only_edda).unwrap().is_none());
+        assert_eq!(
+            select_downloaded_model(Some(name), only_edda)
+                .unwrap()
+                .unwrap()
+                .fixed_language,
+            Some("da")
+        );
+        let error =
+            select_downloaded_model(Some(name), |entry| entry.name == "large-v3").unwrap_err();
+        assert!(error
+            .to_string()
+            .contains(&format!("wd models download {name}")));
+    }
+}

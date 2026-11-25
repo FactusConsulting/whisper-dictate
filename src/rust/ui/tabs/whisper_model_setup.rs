@@ -71,7 +71,8 @@ impl WhisperDictateApp {
             return;
         }
 
-        let model = self.settings.model.trim();
+        let model = self.pending_whisper_model();
+        let model = model.trim();
         let capacity_warning = self.whisper_capacity_warning(model);
         let external_path_is_set = std::env::var_os(WHISPER_MODEL_PATH_ENV).is_some();
         if capacity_warning.is_none() && external_path_is_set {

@@ -145,21 +145,32 @@ fn whisper_model_choices() -> Vec<&'static str> {
         .collect()
 }
 
+fn whisper_model_display_name(model: &str) -> &str {
+    match model {
+        "edda-v0.2" => "Danish Turbo",
+        "edda-v0.2-large" => "Danish Quality",
+        _ => model,
+    }
+}
+
 /// Accuracy/speed note and estimated GPU memory in MiB. Hidden legacy entries
 /// remain resolvable here so we can describe users' existing configurations.
 fn whisper_model_hint(model: &str) -> (&'static str, u32) {
     let note = match model {
         "large-v3" => "most accurate, slowest",
         "large-v3-turbo" => "great accuracy, fast",
+        "edda-v0.2" => "fast Danish dictation",
+        "edda-v0.2-large" => "higher-accuracy Danish dictation",
         "medium" => "good accuracy, lighter",
         "small" => "ok accuracy, fast & light",
         "base" => "low accuracy, very light",
         "tiny" => "lowest accuracy, fastest",
         _ => "",
     };
-    let required_mib = crate::whisper::model_manager::find(model).map_or(0, |entry| {
-        crate::model_capacity::whisper_required_mib(entry.size_bytes)
-    });
+    let required_mib = crate::whisper::model_manager::find(model).map_or(
+        0,
+        crate::whisper::model_manager::ModelEntry::required_gpu_mib,
+    );
     (note, required_mib)
 }
 

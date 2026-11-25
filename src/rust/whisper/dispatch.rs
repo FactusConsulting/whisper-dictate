@@ -48,6 +48,7 @@ use anyhow::{anyhow, Context, Result};
 
 use super::idle::{parse_idle_timeout_from_env, IdleUnloadingModel};
 use super::local::LocalWhisper;
+use super::model_manager::{self, ModelEntry};
 use super::protocol::{
     normalise_language, normalise_prompt, read_request_from_reader, serve_loop, ServerReady,
     TranscribeRequest, TranscribeResponse,
@@ -64,8 +65,8 @@ pub const MODEL_NAME_ENV: &str = "VOICEPI_MODEL";
 /// prints one JSON response to stdout.
 pub fn handle_transcribe_wav() -> Result<()> {
     let request = read_request_from_reader(&mut io::stdin().lock())?;
-    let model_path = resolve_model_path_from_env()?;
-    let response = dispatch(&model_path, request)?;
+    let model = resolve_model_from_env()?;
+    let response = dispatch(&model, request)?;
     println!("{}", serde_json::to_string(&response)?);
     Ok(())
 }
@@ -87,9 +88,8 @@ pub fn handle_transcribe_wav() -> Result<()> {
 /// NOT loaded at this point — first transcribe call triggers the load
 /// via [`IdleUnloadingModel::with_model`]'s lazy loader.
 pub fn handle_transcribe_server() -> Result<()> {
-    let model_path = resolve_model_path_from_env()?;
+    let selection = resolve_model_from_env()?;
     let idle = parse_idle_timeout_from_env()?;
-    let model = IdleUnloadingModel::for_local_whisper(model_path.clone(), idle);
 
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
@@ -99,9 +99,10 @@ pub fn handle_transcribe_server() -> Result<()> {
     // line so the protocol stays stable.
     let ready = ServerReady {
         ready: true,
-        model_path: model_path.display().to_string(),
+        model_path: selection.path.display().to_string(),
         idle_unload_s: idle.map(|d| d.as_secs()).unwrap_or(0),
     };
+    let model = IdleUnloadingModel::for_local_whisper(selection, idle);
     use std::io::Write;
     writeln!(stdout, "{}", serde_json::to_string(&ready)?)
         .context("failed to write transcribe-server ready line")?;
@@ -117,39 +118,33 @@ pub fn handle_transcribe_server() -> Result<()> {
     })
 }
 
-/// Resolve the model file path for inference.
-///
-/// Checks, in order:
-/// 1. `VOICEPI_WHISPER_MODEL_PATH` — explicit override (unchanged behaviour).
-/// 2. The user-cache whisper-models directory (populated by `models download`
-///    or the Settings download UI) — tiny.en → base.en → small.en preference.
-///    This means a user who downloaded a model via the UI can start with
-///    `VOICEPI_TRANSCRIBE_BACKEND=rust` without a separate env-var step.
-///
-/// `pub(crate)` so the in-process session sink can reuse the
-/// same resolution rules when wiring [`WhisperLocalTranscribeBackend`]
-/// -- keeping the
-/// resolution logic single-sourced means the env-var / cache-lookup
-/// contract is identical for the subprocess-per-utterance dispatcher
-/// (`handle_transcribe_wav`), the long-running server
-/// (`handle_transcribe_server`), and the in-process session sink.
-pub(crate) fn resolve_model_path_from_env() -> Result<PathBuf> {
-    resolve_model_path(
+#[derive(Debug)]
+pub(crate) struct ResolvedModel {
+    pub(crate) path: PathBuf,
+    pub(crate) entry: Option<&'static ModelEntry>,
+}
+
+/// Resolve the same model selection as the in-process session, using the environment.
+pub(crate) fn resolve_model_from_env() -> Result<ResolvedModel> {
+    resolve_model(
         env::var(MODEL_PATH_ENV).ok().as_deref(),
         env::var(MODEL_NAME_ENV).ok().as_deref(),
     )
 }
 
-/// Resolve a model from already-parsed runtime settings.
-pub(crate) fn resolve_model_path(
+/// Resolve an unmanaged path override, a requested preset, or a verified cached preset.
+pub(crate) fn resolve_model(
     explicit_path: Option<&str>,
     requested_model: Option<&str>,
-) -> Result<PathBuf> {
+) -> Result<ResolvedModel> {
     // Primary: explicit path override.
     if let Some(raw) = explicit_path {
         let trimmed = raw.trim();
         if !trimmed.is_empty() {
-            return Ok(PathBuf::from(trimmed));
+            return Ok(ResolvedModel {
+                path: PathBuf::from(trimmed),
+                entry: None,
+            });
         }
         return Err(anyhow!(
             "{MODEL_PATH_ENV} is set but empty; point it at a GGML \
@@ -159,12 +154,14 @@ pub(crate) fn resolve_model_path(
     // Resolve an explicitly selected catalog name before the ordered-cache
     // fallback. Without this step, `run --model large-v3` could silently load
     // the first verified entry (`large-v3-turbo`) when both were downloaded.
-    if let Some(entry) =
-        crate::whisper::model_selection::select_downloaded_model(requested_model, |entry| {
-            crate::whisper::model_manager::is_downloaded(entry)
-        })?
-    {
-        return crate::whisper::model_manager::model_path(entry);
+    if let Some(entry) = super::model_selection::select_downloaded_model(
+        requested_model,
+        model_manager::is_downloaded,
+    )? {
+        return Ok(ResolvedModel {
+            path: model_manager::model_path(entry)?,
+            entry: Some(entry),
+        });
     }
     // Recommend a VISIBLE model: this loop skips hidden test fixtures, so
     // suggesting one would send the user in a circle — they would download it
@@ -181,15 +178,15 @@ pub(crate) fn resolve_model_path(
 /// (stdin read, stdout print, env-var resolve) stays separable from the
 /// actual model load + inference call — which is the only piece that touches
 /// whisper.cpp and is therefore awkward to unit-test without a real model.
-fn dispatch(model_path: &Path, request: TranscribeRequest) -> Result<TranscribeResponse> {
+fn dispatch(model: &ResolvedModel, request: TranscribeRequest) -> Result<TranscribeResponse> {
     match request {
         TranscribeRequest::TranscribeWav {
             wav_path,
             language,
             initial_prompt,
         } => {
-            let whisper = LocalWhisper::new(model_path).with_context(|| {
-                format!("failed to load whisper model from {}", model_path.display())
+            let whisper = LocalWhisper::from_resolved(model).with_context(|| {
+                format!("failed to load whisper model from {}", model.path.display())
             })?;
             // Normalise the language and prompt at the dispatch boundary so
             // the library layer below only sees the states it cares about.
@@ -227,7 +224,7 @@ mod tests {
     };
 
     #[test]
-    fn resolve_model_path_errors_when_env_missing_and_no_cache() {
+    fn resolve_model_errors_when_env_missing_and_no_cache() {
         let _guard = crate::test_env_lock::lock_env();
         let saved = env::var(MODEL_PATH_ENV).ok();
         env::remove_var(MODEL_PATH_ENV);
@@ -235,7 +232,7 @@ mod tests {
         let saved_cache = env::var_os(CACHE_ENV_VAR);
         env::set_var(CACHE_ENV_VAR, "/definitely/not/a/real/dir/xyz");
 
-        let err = resolve_model_path_from_env().unwrap_err().to_string();
+        let err = resolve_model_from_env().unwrap_err().to_string();
 
         match saved_cache {
             Some(v) => env::set_var(CACHE_ENV_VAR, v),
@@ -252,12 +249,12 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_path_errors_when_env_blank() {
+    fn resolve_model_errors_when_env_blank() {
         let _guard = crate::test_env_lock::lock_env();
         let saved = env::var(MODEL_PATH_ENV).ok();
         env::set_var(MODEL_PATH_ENV, "   ");
 
-        let err = resolve_model_path_from_env().unwrap_err();
+        let err = resolve_model_from_env().unwrap_err();
         assert!(err.to_string().contains("empty"), "unexpected error: {err}");
 
         match saved {
@@ -267,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_path_skips_corrupt_cached_file() {
+    fn resolve_model_skips_corrupt_cached_file() {
         // P2: a file that exists but fails SHA-256 verification must be
         // skipped; the function must NOT return a corrupt cached path.
         // After the fix, `is_downloaded` gates the fallback, so a file with
@@ -297,7 +294,7 @@ mod tests {
         std::fs::write(&corrupt_model, b"corrupt-contents").unwrap();
 
         // Must fail: corrupt file is skipped, no valid model found.
-        let err = resolve_model_path_from_env()
+        let err = resolve_model_from_env()
             .expect_err("corrupt cached file must not be returned")
             .to_string();
 
@@ -315,18 +312,30 @@ mod tests {
     }
 
     #[test]
-    fn resolve_model_path_returns_value_when_set() {
+    fn resolve_model_returns_unmanaged_path_even_for_an_edda_cache_path() {
         let _guard = crate::test_env_lock::lock_env();
-        let saved = env::var(MODEL_PATH_ENV).ok();
-        env::set_var(MODEL_PATH_ENV, "/tmp/ggml-tiny.en.bin");
+        let saved_cache = env::var_os(CACHE_ENV_VAR);
+        let cache = tempfile::tempdir().unwrap();
+        env::set_var(CACHE_ENV_VAR, cache.path());
+        let entry = model_manager::find("edda-v0.2").unwrap();
+        let path = model_manager::model_path(entry).unwrap();
+        let saved = env::var_os(MODEL_PATH_ENV);
+        env::set_var(MODEL_PATH_ENV, &path);
 
-        let p = resolve_model_path_from_env().unwrap();
-        assert_eq!(p, PathBuf::from("/tmp/ggml-tiny.en.bin"));
+        let resolved = resolve_model_from_env();
 
         match saved {
             Some(v) => env::set_var(MODEL_PATH_ENV, v),
             None => env::remove_var(MODEL_PATH_ENV),
         }
+        match saved_cache {
+            Some(v) => env::set_var(CACHE_ENV_VAR, v),
+            None => env::remove_var(CACHE_ENV_VAR),
+        }
+
+        let model = resolved.unwrap();
+        assert_eq!(model.path, path);
+        assert!(model.entry.is_none());
     }
 
     /// End-to-end: with a real model + WAV (env-gated, same as the
@@ -352,7 +361,11 @@ mod tests {
             language: None,
             initial_prompt: None,
         };
-        let response = dispatch(Path::new(&model), request).expect("dispatch ok");
+        let model = ResolvedModel {
+            path: PathBuf::from(model),
+            entry: None,
+        };
+        let response = dispatch(&model, request).expect("dispatch ok");
         assert!(!response.text.trim().is_empty(), "transcript was empty");
         assert!(
             response.text.to_ascii_lowercase().contains("world"),

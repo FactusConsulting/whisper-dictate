@@ -61,8 +61,8 @@
       "key": "model",
       "default": "large-v3-turbo",
       "live": false,
-      "choices": ["large-v3-turbo", "large-v3"],
-      "description": "Local Whisper model. Settings only offers models that fit a supported Vulkan GPU. Download the selected model explicitly before starting. Hidden legacy tiny, base, small, medium, tiny.en, base.en, and small.en values remain valid configuration values.",
+      "choices": ["large-v3-turbo", "large-v3", "edda-v0.2", "edda-v0.2-large"],
+      "description": "Local Whisper model. Settings only offers models that fit a supported Vulkan GPU. Danish Turbo (edda-v0.2) and Danish Quality (edda-v0.2-large) require an explicit selection and transcribe in Danish regardless of the language setting. Download the selected model explicitly before starting. Hidden legacy tiny, base, small, medium, tiny.en, base.en, and small.en values remain valid configuration values.",
       "advanced": false,
       "ui_simple": true,
       "category": "core"

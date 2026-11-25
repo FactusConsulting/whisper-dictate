@@ -50,7 +50,7 @@ use crate::dictate::{
 use crate::runtime::{RepaintNotifier, RuntimeEvent};
 
 use super::rust_session_preview::runtime_channel_preview_sink;
-use crate::whisper::{resolve_model_path, IdleUnloadingModel};
+use crate::whisper::{resolve_model, IdleUnloadingModel};
 
 use super::rust_session_inject::ProductionInjectBackend;
 use super::settings_snapshot::RuntimeSettingsSnapshot;
@@ -341,7 +341,7 @@ fn preview_seconds_with(lookup: &impl Fn(&str) -> Option<String>) -> f64 {
 ///   [`CloudTranscribeConfig::from_env_with_provider`]; the model-path /
 ///   idle-timeout resolution below is SKIPPED on that path (cloud STT
 ///   needs no local model). Any other value keeps local Whisper.
-/// - Model path (local only): [`resolve_model_path`] -- same
+/// - Model selection (local only): [`resolve_model`] -- same
 ///   env-var / user-cache lookup the dispatcher and long-running server
 ///   use, so the contract is identical whether the user is on the
 ///   subprocess-per-utterance path, the long-running line server, or
@@ -394,7 +394,7 @@ pub(crate) fn make_real_session_with_activity_and_settings(
         // Transcribe seam: `openai` selects the cloud
         // `/audio/transcriptions` endpoint (openai OR Groq, by base URL) and
         // needs NO local model -- `ProductionTranscribeBackend::select`
-        // runs the local thunk (and thus `resolve_model_path_from_env`)
+        // runs the local thunk (and thus `resolve_model`)
         // ONLY on the local path, which is the whole point of cloud STT
         // (a user with no GGML model installed can still dictate). Any
         // other `VOICEPI_STT_BACKEND` value (incl. unset) keeps local
@@ -483,7 +483,7 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                     })
                 },
                 || -> Result<WhisperLocalTranscribeBackend, String> {
-                    let model_path = resolve_model_path(
+                    let selection = resolve_model(
                         runtime.value(crate::whisper::MODEL_PATH_ENV),
                         Some(&settings.model),
                     )
@@ -499,13 +499,13 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                         Some(&settings.device),
                     )
                     .map_err(|e| format!("GPU policy: {e:#}"))?;
-                    crate::whisper::LocalWhisper::check_gpu_capacity(&model_path, gpu_policy)
+                    crate::whisper::LocalWhisper::check_gpu_capacity(&selection, gpu_policy)
                         .map_err(|e| format!("Whisper GPU capacity: {e:#}"))?;
                     crate::whisper::accel::global().begin_model_load(crate::whisper::Accel::Vulkan);
                     let no_timestamps =
                         crate::privacy::truthy(runtime.value(crate::whisper::NO_TIMESTAMPS_ENV));
                     let model = IdleUnloadingModel::for_local_whisper_with_policy(
-                        model_path,
+                        selection,
                         idle,
                         gpu_policy,
                         no_timestamps,

@@ -161,10 +161,10 @@ fn pending_gpu_probe_does_not_offer_local_whisper_until_a_model_fits() {
     app.gpu_probe = Some(rx);
     let turbo = crate::whisper::model_manager::find("large-v3-turbo").unwrap();
     let quality = crate::whisper::model_manager::find("large-v3").unwrap();
-    let turbo_mib = crate::model_capacity::whisper_required_mib(turbo.size_bytes);
+    let turbo_mib = turbo.required_gpu_mib();
 
     app.poll_runtime();
-    assert!(!app.whisper_model_fits(turbo.size_bytes));
+    assert!(!app.whisper_model_fits(turbo_mib));
 
     tx.send(SpeechGpuTotals {
         whisper_mib: Some(turbo_mib),
@@ -173,8 +173,8 @@ fn pending_gpu_probe_does_not_offer_local_whisper_until_a_model_fits() {
     .unwrap();
     app.poll_runtime();
 
-    assert!(app.whisper_model_fits(turbo.size_bytes));
-    assert!(!app.whisper_model_fits(quality.size_bytes));
+    assert!(app.whisper_model_fits(turbo_mib));
+    assert!(!app.whisper_model_fits(quality.required_gpu_mib()));
 }
 
 #[test]

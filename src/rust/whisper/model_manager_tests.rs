@@ -81,22 +81,14 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 #[test]
 fn catalog_contains_expected_models() {
-    // Encodes the curated scope decision (catalog trim, 2026-07): the app is
-    // MULTILINGUAL, so the English-only variants and the mid-size models are no
-    // longer offered as NEW choices — what a user picks between is turbo (fast)
-    // vs large-v3 (most accurate). They remain in the catalog as `hidden` so an
-    // upgrade never strands a user whose cached model is one of them, and so CI
-    // can keep using the ~78 MB `tiny` fixture.
-    //
-    // ORDER IS PRIORITY ORDER: `resolve_model_path_from_env` takes the first
-    // cached+verified entry, so user-facing models must precede the hidden
-    // legacy ones — otherwise a cached `tiny` would beat a cached `large-v3`.
     let names: Vec<&str> = CATALOG.iter().map(|e| e.name).collect();
     assert_eq!(
         names,
         vec![
             "large-v3-turbo",
             "large-v3",
+            "edda-v0.2",
+            "edda-v0.2-large",
             "tiny",
             "base",
             "small",
@@ -106,11 +98,11 @@ fn catalog_contains_expected_models() {
             "small.en",
         ]
     );
-    // Everything after the two visible entries must be hidden, and the two
-    // visible ones must not be — that invariant is what makes the ordering
-    // above meaningful.
     for entry in CATALOG {
-        let expect_visible = matches!(entry.name, "large-v3-turbo" | "large-v3");
+        let expect_visible = matches!(
+            entry.name,
+            "large-v3-turbo" | "large-v3" | "edda-v0.2" | "edda-v0.2-large"
+        );
         assert_eq!(
             !entry.hidden, expect_visible,
             "visibility mismatch for {}",
@@ -620,6 +612,9 @@ fn is_downloaded_true_when_cached_file_matches_hash() {
         sha256: hash_static,
         size_bytes: payload.len() as u64,
         description: "synthetic test entry",
+        fixed_language: None,
+        no_timestamps: false,
+        estimated_gpu_mib: None,
         hidden: true,
     };
     let path = model_path(&entry).expect("override must resolve");
@@ -733,7 +728,10 @@ fn visible_catalog_hides_test_fixtures_but_find_still_resolves_them() {
     // but CI (`models download tiny.en`, `self-test whisper-load`) resolves it
     // by name — so `find` must keep seeing what `visible_catalog` hides.
     let visible: Vec<&str> = visible_catalog().map(|e| e.name).collect();
-    assert_eq!(visible, vec!["large-v3-turbo", "large-v3"]);
+    assert_eq!(
+        visible,
+        ["large-v3-turbo", "large-v3", "edda-v0.2", "edda-v0.2-large"]
+    );
     assert!(
         !visible.iter().any(|n| n.ends_with(".en")),
         "no English-only model may be user-facing in a multilingual app"
@@ -768,21 +766,22 @@ fn legacy_cached_model_still_resolves_after_upgrade() {
 }
 
 #[test]
-fn catalog_urls_are_derived_from_filenames() {
-    // The `model_entry!` macro builds `url` as BASE + filename, which removes
-    // ~8 lines of copy-paste per entry and makes a filename/URL mismatch
-    // impossible. Pin that contract: if someone hand-writes an entry again, or
-    // upstream moves the mirror, this fails loudly rather than silently
-    // downloading the wrong weights (the SHA check would catch it, but only
-    // after a multi-GB transfer).
-    const BASE: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/";
+fn catalog_urls_match_the_cache_filename_and_pin_danish_weights() {
     for entry in CATALOG {
-        assert_eq!(
-            entry.url,
-            format!("{BASE}{}", entry.filename),
-            "url must be BASE + filename for {}",
-            entry.name
-        );
+        let (download_root, filename) = entry.url.rsplit_once('/').unwrap();
+        assert_eq!(filename, entry.filename);
+        if entry.fixed_language == Some("da") {
+            let revision = download_root
+                .strip_prefix("https://huggingface.co/Larswa/edda-whisper-ggml/resolve/")
+                .unwrap();
+            assert_eq!(revision.len(), 40);
+            assert!(revision.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        } else {
+            assert_eq!(
+                download_root,
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
+            );
+        }
     }
 }
 

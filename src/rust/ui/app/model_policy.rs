@@ -27,8 +27,43 @@ impl WhisperDictateApp {
         )
     }
 
+    pub(in crate::ui) fn pending_whisper_model_env_fallback(&self) -> Option<String> {
+        // The worker prefers config over the environment. A pending picker
+        // change will become that config value when saved.
+        let model = std::env::var("VOICEPI_MODEL")
+            .ok()
+            .filter(|value| !value.is_empty())?;
+        if self.settings.model != self.saved_settings.model {
+            return self.settings.model.trim().is_empty().then_some(model);
+        }
+        let configured = config::load_raw_config().ok().is_some_and(|raw| {
+            raw.get("model")
+                .is_some_and(|value| !value.is_null() && value.as_str() != Some(""))
+        });
+        (!configured).then_some(model)
+    }
+
+    pub(in crate::ui) fn pending_whisper_model(&self) -> std::borrow::Cow<'_, str> {
+        match self.pending_whisper_model_env_fallback() {
+            Some(model) => std::borrow::Cow::Owned(model),
+            None => std::borrow::Cow::Borrowed(&self.settings.model),
+        }
+    }
+
+    pub(in crate::ui) fn pending_whisper_model_entry(
+        &self,
+    ) -> Option<&'static crate::whisper::model_manager::ModelEntry> {
+        if std::env::var_os(WHISPER_MODEL_PATH_ENV).is_some() {
+            return None;
+        }
+        crate::whisper::model_manager::find(self.pending_whisper_model().trim())
+    }
+
     pub(in crate::ui) fn selected_whisper_model_warning(&self) -> Option<String> {
-        self.whisper_model_warning(&self.settings.stt_backend, &self.settings.model)
+        self.whisper_model_warning(
+            &self.settings.stt_backend,
+            self.pending_whisper_model().trim(),
+        )
     }
 
     pub(in crate::ui) fn runtime_whisper_model_warning(&self) -> Option<String> {
@@ -52,7 +87,7 @@ impl WhisperDictateApp {
                 return Some(warning);
             }
         }
-        self.whisper_model_warning(&stt_backend, &model)
+        self.whisper_model_warning(&stt_backend, model.trim())
     }
 
     fn whisper_model_warning(&self, stt_backend: &str, model: &str) -> Option<String> {

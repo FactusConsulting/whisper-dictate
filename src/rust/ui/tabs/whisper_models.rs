@@ -18,15 +18,13 @@ use crate::whisper::models_cli::human_bytes;
 impl WhisperDictateApp {
     /// The settings UI checks total VRAM. Loading the model also needs enough
     /// currently free memory on the same GPU, which the runtime verifies.
-    pub(in crate::ui) fn whisper_model_fits(&self, file_bytes: u64) -> bool {
-        self.gpu_probe.is_none()
-            && self.gpu_total_mb.is_some_and(|total| {
-                total >= crate::model_capacity::whisper_required_mib(file_bytes)
-            })
+    pub(in crate::ui) fn whisper_model_fits(&self, required_mib: u32) -> bool {
+        self.gpu_probe.is_none() && self.gpu_total_mb.is_some_and(|total| total >= required_mib)
     }
 
     pub(in crate::ui) fn whisper_stock_model_fits(&self) -> bool {
-        model_manager::visible_catalog().any(|entry| self.whisper_model_fits(entry.size_bytes))
+        model_manager::visible_catalog()
+            .any(|entry| self.whisper_model_fits(entry.required_gpu_mib()))
     }
 
     pub(in crate::ui) fn whisper_custom_model_bytes(&self) -> Option<u64> {
@@ -49,20 +47,19 @@ impl WhisperDictateApp {
         };
 
         let custom = std::env::var_os(crate::ui::app::WHISPER_MODEL_PATH_ENV).is_some();
-        let bytes = if custom {
+        let required = if custom {
             let Some(bytes) = self.whisper_custom_model_bytes() else {
                 return Some("VOICEPI_WHISPER_MODEL_PATH must point to an existing, non-empty GGML model file. Fix or remove it before recording.".to_owned());
             };
-            bytes
+            crate::model_capacity::whisper_required_mib(bytes)
         } else {
             let Some(entry) = model_manager::find(model.trim()) else {
                 return (!model.trim().is_empty()).then(|| {
                     format!("{model} is not a supported Whisper model. Choose a fitting model or explicitly select a hosted engine in Speech settings.")
                 });
             };
-            entry.size_bytes
+            entry.required_gpu_mib()
         };
-        let required = crate::model_capacity::whisper_required_mib(bytes);
         (total < required).then(|| {
             let label = if custom { "The custom GGML model" } else { model };
             format!(
@@ -139,7 +136,7 @@ impl WhisperDictateApp {
         any_running: bool,
         local_only: bool,
     ) {
-        if !self.whisper_model_fits(entry.size_bytes) {
+        if !self.whisper_model_fits(entry.required_gpu_mib()) {
             return;
         }
         ui.add_space(2.0);
@@ -157,7 +154,11 @@ impl WhisperDictateApp {
         // multi-hundred-MB model file on the UI thread during a repaint.
         let already_cached = self.whisper_model_downloads.is_verified_fast(entry);
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(entry.name).strong().monospace());
+            ui.label(
+                egui::RichText::new(whisper_model_display_name(entry.name))
+                    .strong()
+                    .monospace(),
+            );
             ui.label(format!(
                 "  {}  {}",
                 human_bytes(entry.size_bytes),

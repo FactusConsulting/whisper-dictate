@@ -1,7 +1,8 @@
+use super::render_test_support::{contains_text, rendered_texts_for_tab};
 use super::test_support::{test_app, EnvVarGuard};
 use super::{
     model_download_status, model_download_warning, whisper_model_choices, whisper_model_hint,
-    AppSettings, RuntimeState,
+    AppSettings, RuntimeState, Tab,
 };
 use crate::ui::app::WHISPER_MODEL_PATH_ENV;
 use crate::ui::whisper_models_state::ModelAvailability;
@@ -28,6 +29,7 @@ fn with_empty_model_cache(run: impl FnOnce()) {
     .unwrap();
     let _config = EnvVarGuard::set(CONFIG_ENV, config_path.to_str().unwrap());
     let _model_path = EnvVarGuard::remove(WHISPER_MODEL_PATH_ENV);
+    let _model = EnvVarGuard::remove("VOICEPI_MODEL");
     let _local_only = EnvVarGuard::remove("VOICEPI_LOCAL_ONLY");
     run();
 }
@@ -348,6 +350,7 @@ fn invalid_external_model_path_blocks_recording() {
 fn unknown_local_model_requires_a_new_selection() {
     let _lock = crate::test_env_lock::lock_env();
     let _model_path = EnvVarGuard::remove(WHISPER_MODEL_PATH_ENV);
+    let _model = EnvVarGuard::remove("VOICEPI_MODEL");
     let app = test_app(AppSettings {
         stt_backend: "whisper".to_owned(),
         model: "not-a-whisper-model".to_owned(),
@@ -361,12 +364,128 @@ fn unknown_local_model_requires_a_new_selection() {
 }
 
 #[test]
-fn picker_offers_only_the_two_real_choices() {
-    // The offer list is deliberately minimal: a machine
-    // that cannot run these should use a cloud STT backend rather than a tiny
-    // local model. Keep it in sync with the GGML download catalog so Settings
-    // never offers a model the downloader won't fetch.
-    assert_eq!(whisper_model_choices(), ["large-v3-turbo", "large-v3"]);
+fn picker_offers_visible_stock_and_danish_models() {
+    let choices = whisper_model_choices();
+    assert_eq!(choices.len(), 4);
+    for model in ["large-v3-turbo", "large-v3", "edda-v0.2", "edda-v0.2-large"] {
+        assert!(choices.contains(&model), "{model} missing from picker");
+    }
+}
+
+fn speech_test_app(settings: AppSettings) -> super::WhisperDictateApp {
+    let mut app = test_app(settings);
+    app.audio_devices_loaded = true;
+    app.settings.update_check = false;
+    app.tray.disable();
+    app
+}
+
+#[test]
+fn speech_shows_danish_for_pending_edda_without_changing_the_language() {
+    with_empty_model_cache(|| {
+        let mut app = speech_test_app(AppSettings {
+            stt_backend: "whisper".to_owned(),
+            model: "large-v3".to_owned(),
+            lang: "de".to_owned(),
+            ..Default::default()
+        });
+        app.gpu_total_mb = Some(8192);
+        app.settings.model = "edda-v0.2".to_owned();
+
+        let texts = rendered_texts_for_tab(&mut app, Tab::Speech);
+        assert!(texts.contains("Danish (fixed by model)"));
+        assert!(contains_text(&texts, "Danish Turbo —"));
+        assert!(!texts.contains("German"));
+        assert_eq!(app.settings.lang, "de");
+        assert_eq!(app.saved_settings.lang, "de");
+
+        app.settings.model = "large-v3".to_owned();
+        let texts = rendered_texts_for_tab(&mut app, Tab::Speech);
+        assert!(!texts.contains("Danish (fixed by model)"));
+        assert!(texts.contains("German"));
+    });
+}
+
+#[test]
+fn speech_keeps_language_picker_for_custom_path_and_hosted_with_saved_edda() {
+    with_empty_model_cache(|| {
+        let mut app = speech_test_app(AppSettings {
+            stt_backend: "whisper".to_owned(),
+            model: "edda-v0.2-large".to_owned(),
+            lang: "de".to_owned(),
+            ..Default::default()
+        });
+        app.gpu_total_mb = Some(8192);
+        {
+            let model = tempfile::NamedTempFile::new().unwrap();
+            model.as_file().set_len(1).unwrap();
+            let _path = EnvVarGuard::set(WHISPER_MODEL_PATH_ENV, model.path().to_str().unwrap());
+            let texts = rendered_texts_for_tab(&mut app, Tab::Speech);
+            assert!(contains_text(&texts, "Custom GGML file"));
+            assert!(!texts.contains("Danish (fixed by model)"));
+            assert!(texts.contains("German"));
+        }
+
+        app.settings.stt_backend = "openai".to_owned();
+        let texts = rendered_texts_for_tab(&mut app, Tab::Speech);
+        assert!(!texts.contains("Danish (fixed by model)"));
+        assert!(texts.contains("German"));
+        assert_eq!(app.settings.lang, "de");
+    });
+}
+
+#[test]
+fn speech_shows_only_fitting_download_rows() {
+    with_empty_model_cache(|| {
+        let mut app = speech_test_app(AppSettings {
+            stt_backend: "whisper".to_owned(),
+            model: "large-v3-turbo".to_owned(),
+            ..Default::default()
+        });
+        app.gpu_total_mb = Some(2815);
+        let texts = rendered_texts_for_tab(&mut app, Tab::Speech);
+        assert!(!texts.contains("Whisper model downloads"));
+        assert!(!texts.contains("Danish Turbo"));
+
+        app.gpu_total_mb = Some(2816);
+        let texts = rendered_texts_for_tab(&mut app, Tab::Speech);
+        assert!(texts.contains("large-v3-turbo"));
+        assert!(texts.contains("Danish Turbo"));
+        assert!(!texts.contains("large-v3"));
+        assert!(!texts.contains("Danish Quality"));
+
+        app.gpu_total_mb = Some(4352);
+        let texts = rendered_texts_for_tab(&mut app, Tab::Speech);
+        assert!(texts.contains("large-v3"));
+        assert!(texts.contains("Danish Quality"));
+    });
+}
+
+#[test]
+fn speech_uses_model_env_only_when_config_has_no_model() {
+    with_empty_model_cache(|| {
+        let _model = EnvVarGuard::set("VOICEPI_MODEL", "edda-v0.2-large");
+        let mut app = speech_test_app(AppSettings {
+            stt_backend: "whisper".to_owned(),
+            model: "large-v3".to_owned(),
+            lang: "de".to_owned(),
+            ..Default::default()
+        });
+        app.gpu_total_mb = Some(8192);
+
+        let texts = rendered_texts_for_tab(&mut app, Tab::Speech);
+        assert!(!texts.contains("Danish (fixed by model)"));
+
+        std::fs::write(crate::config::config_path(), r#"{"stt_backend":"whisper"}"#).unwrap();
+        let texts = rendered_texts_for_tab(&mut app, Tab::Speech);
+        assert!(texts.contains("Danish (fixed by model)"));
+        assert!(contains_text(&texts, "Danish Quality —"));
+
+        app.settings.model = "large-v3-turbo".to_owned();
+        let texts = rendered_texts_for_tab(&mut app, Tab::Speech);
+        assert!(!texts.contains("Danish (fixed by model)"));
+        assert!(texts.contains("German"));
+    });
 }
 
 #[test]
