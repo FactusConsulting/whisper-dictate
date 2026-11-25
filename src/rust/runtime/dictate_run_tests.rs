@@ -3,20 +3,6 @@
 use super::*;
 
 #[test]
-fn native_runtime_options_fail_before_session_start() {
-    let vulkan = validate_native_runtime_options(Some("vulkan"), Some("whisper"), false)
-        .expect_err("local Vulkan must fail on a CPU-only build");
-    assert!(vulkan.to_string().contains("CPU-only"));
-
-    validate_native_runtime_options(Some("cpu"), Some("whisper"), false).unwrap();
-    validate_native_runtime_options(Some("vulkan"), Some("whisper"), true).unwrap();
-    validate_native_runtime_options(Some("vulkan"), Some("openai"), false)
-        .expect("cloud STT ignores the local Vulkan device hint");
-    validate_native_runtime_options(Some("cuda"), Some("whisper"), false)
-        .expect_err("legacy CUDA alias must receive the same CPU-only guard");
-}
-
-#[test]
 fn effective_terminal_snapshot_validates_local_nemotron_device_support() {
     let mut runtime = crate::runtime::settings_snapshot::RuntimeSettingsSnapshot::from_pairs([
         ("VOICEPI_STT_BACKEND".to_owned(), "openai".to_owned()),

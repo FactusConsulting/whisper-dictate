@@ -44,18 +44,16 @@ whisper-rs-local = ["dep:whisper-rs"]
 # in whisper.cpp's Vulkan backend at compile time — works on Windows AND
 # Linux from a single feature (vendor-agnostic, no NVIDIA-only CUDA DLLs).
 # Requires the Vulkan SDK on the build host on top of the `whisper-rs-local`
-# prerequisites. OFF by default; runtime selection is via `VOICEPI_WHISPER_GPU`
-# (see `src/rust/whisper/gpu.rs`). On a build without this feature the env
-# var still parses but the resolver in `should_use_gpu` always returns
-# false, so users that set `VOICEPI_WHISPER_GPU=vulkan` on a stock binary
-# silently fall back to CPU rather than refusing to run.
-whisper-rs-vulkan = ["whisper-rs-local", "whisper-rs/vulkan"]
+# prerequisites. OFF by default; local Whisper transcription requires this
+# feature and a usable Vulkan GPU. CPU-only builds retain the model-load
+# diagnostic but use hosted engines for transcription.
+whisper-rs-vulkan = ["whisper-rs-local", "whisper-rs/vulkan", "dep:ash"]
 # In-process Nemotron 3.5 ASR through NVIDIA's stable NeMo-Speech.cpp C ABI.
 # The library is loaded at runtime, so this feature does not introduce a
 # CMake/CUDA build requirement.  The normal shipping profile includes the
 # adapter; selecting Nemotron in the UI opts into `inproc://nemotron` and
 # bootstraps the verified upstream runtime/model automatically.
-nemotron-local = ["dep:libloading"]
+nemotron-local = ["dep:libloading", "dep:ash"]
 # VAD-free capture building block: cpal microphone capture + rubato resample,
 # emitting raw 16 kHz frames. This is the push-to-talk capture path: the key
 # press/release supplies recording boundaries. Device enumeration (`devices`)
@@ -167,6 +165,8 @@ ureq = { version = "3.3", features = ["json", "platform-verifier"] }
 # decoding. Unconditional so the WAV helpers are always available and covered.
 hound = "3.5"
 libloading = { version = "0.9", optional = true }
+# Probe Vulkan device type and memory budget without opening a logical device.
+ash = { version = "0.38", default-features = false, features = ["loaded"], optional = true }
 # Optional deps for the `whisper-rs-local` feature. `dep:` syntax in
 # [features] keeps them out of the default build entirely.
 # `raw-api` is a re-export-only feature (it compiles no extra code): it

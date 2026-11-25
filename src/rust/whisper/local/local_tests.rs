@@ -146,22 +146,47 @@ fn auto_language_transcribes_known_speech_when_model_available() {
     assert!(language.is_some(), "auto language was not reported");
 }
 
+#[test]
+fn production_load_refuses_cpu_policy_before_native_load() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("model.bin");
+    std::fs::write(&path, b"ggml").unwrap();
+    let err = unwrap_err(LocalWhisper::with_policy(&path, GpuPolicy::Off, false));
+    assert!(
+        err.to_string().contains("CPU inference is disabled"),
+        "{err}"
+    );
+}
+
+#[cfg(not(feature = "whisper-rs-vulkan"))]
+#[test]
+fn production_load_requires_a_vulkan_build() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("model.bin");
+    std::fs::write(&path, b"ggml").unwrap();
+    for policy in [GpuPolicy::Auto, GpuPolicy::Vulkan] {
+        let err = unwrap_err(LocalWhisper::with_policy(&path, policy, false));
+        assert!(err.to_string().contains("requires Vulkan support"), "{err}");
+    }
+}
+
 /// Give the exact Edda Turbo F16 GGML (`ggml-edda-v0.2-f16.bin`) and
 /// Danish FLEURS test clip 1839 (`da-fleurs-1839.wav`, 16 kHz mono PCM)
 /// via `WHISPER_TEST_EDDA_MODEL_PATH` and `WHISPER_TEST_EDDA_WAV_PATH`.
 ///
 /// From the repository root:
-/// `cargo test --manifest-path src/rust/Cargo.toml --lib --features whisper-rs-local edda_turbo_decodes_danish_without_timestamps -- --ignored`
+/// `cargo test --manifest-path src/rust/Cargo.toml --lib --features whisper-rs-vulkan edda_turbo_decodes_danish_without_timestamps -- --ignored`
+#[cfg(feature = "whisper-rs-vulkan")]
 #[test]
-#[ignore = "requires the exact Edda Turbo GGML and Danish FLEURS WAV"]
+#[ignore = "requires Vulkan, the exact Edda Turbo GGML, and the Danish FLEURS WAV"]
 fn edda_turbo_decodes_danish_without_timestamps() {
     let model = env::var_os("WHISPER_TEST_EDDA_MODEL_PATH")
         .expect("set WHISPER_TEST_EDDA_MODEL_PATH to the Edda Turbo F16 GGML");
     let wav = env::var_os("WHISPER_TEST_EDDA_WAV_PATH")
         .expect("set WHISPER_TEST_EDDA_WAV_PATH to Danish FLEURS test clip 1839");
 
-    let whisper = LocalWhisper::with_policy(Path::new(&model), GpuPolicy::Off, true)
-        .expect("load Edda Turbo on CPU");
+    let whisper = LocalWhisper::with_policy(Path::new(&model), GpuPolicy::Vulkan, true)
+        .expect("load Edda Turbo on Vulkan");
     let text = whisper
         .transcribe_wav(Path::new(&wav), Some("da"), None)
         .expect("transcribe Danish clip");

@@ -145,35 +145,55 @@ fn whisper_model_choices() -> Vec<&'static str> {
         .collect()
 }
 
-/// Accuracy/speed note + approximate VRAM (MB, at the GPU `int8_float16`
-/// default) for a Whisper model value. Drives the model picker's labels and
-/// the "does it fit my GPU" grey-out.
-/// Covers RETIRED models too (`medium` / `small` / `base` / `tiny`): they are
-/// no longer offered by [`whisper_model_choices`], but a user upgrading with one of
-/// them saved must still see a properly labelled picker rather than a bare
-/// name, and `VOICEPI_MODEL` can still select them.
+/// Accuracy/speed note and estimated GPU memory in MiB. Hidden legacy entries
+/// remain resolvable here so we can describe users' existing configurations.
 fn whisper_model_hint(model: &str) -> (&'static str, u32) {
-    match model {
-        "large-v3" => ("most accurate, slowest", 3200),
-        "large-v3-turbo" => ("great accuracy, fast", 1800),
-        "medium" => ("good accuracy, lighter", 1500),
-        "small" => ("ok accuracy, fast & light", 1000),
-        "base" => ("low accuracy, very light", 600),
-        "tiny" => ("lowest accuracy, fastest", 400),
-        _ => ("", 0),
-    }
+    let note = match model {
+        "large-v3" => "most accurate, slowest",
+        "large-v3-turbo" => "great accuracy, fast",
+        "medium" => "good accuracy, lighter",
+        "small" => "ok accuracy, fast & light",
+        "base" => "low accuracy, very light",
+        "tiny" => "lowest accuracy, fastest",
+        _ => "",
+    };
+    let required_mib = crate::whisper::model_manager::find(model).map_or(0, |entry| {
+        crate::model_capacity::whisper_required_mib(entry.size_bytes)
+    });
+    (note, required_mib)
 }
 
-/// Spawn a background thread that queries NVIDIA GPUs and sends the best total
-/// VRAM (or `None`) over the returned channel.  This keeps GPU detection off
-/// the startup / first-frame path so a missing nvidia-smi doesn't stall the UI.
-fn spawn_gpu_probe() -> Receiver<Option<u32>> {
+#[derive(Debug, Default)]
+struct SpeechGpuTotals {
+    whisper_mib: Option<u32>,
+    nemotron_mib: Option<u32>,
+}
+
+/// Find the highest total VRAM usable by each local speech backend without
+/// blocking the first UI frame.
+fn spawn_gpu_probe() -> Receiver<SpeechGpuTotals> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = crate::model_capacity::query_gpus()
-            .iter()
-            .map(|gpu| gpu.total_mb)
-            .max();
+        #[cfg(any(feature = "whisper-rs-vulkan", feature = "nemotron-local"))]
+        let result = {
+            let adapters = crate::model_capacity::vulkan::Adapters::probe();
+            let whisper_mib = adapters
+                .whisper_gpus()
+                .into_iter()
+                .map(|gpu| gpu.total_mib)
+                .max();
+            #[cfg(feature = "nemotron-local")]
+            let nemotron_mib =
+                crate::dictate::backends::nemotron_local::local_gpu_total_mib(&adapters);
+            #[cfg(not(feature = "nemotron-local"))]
+            let nemotron_mib = None;
+            SpeechGpuTotals {
+                whisper_mib,
+                nemotron_mib,
+            }
+        };
+        #[cfg(not(any(feature = "whisper-rs-vulkan", feature = "nemotron-local")))]
+        let result = SpeechGpuTotals::default();
         let _ = tx.send(result);
     });
     rx
@@ -413,13 +433,12 @@ struct WhisperDictateApp {
     supervisor: RuntimeSupervisor,
     background_task: Option<Receiver<BackgroundTaskResult>>,
     background_task_label: Option<&'static str>,
-    /// Best total VRAM (MB) of the detected NVIDIA GPU, or None on CPU
-    /// non-NVIDIA. Populated asynchronously after startup via `gpu_probe`; gates
-    /// the Whisper model picker (no grey-out while still probing).
+    /// Highest total VRAM (MiB) among usable GPU adapters. This is a hardware
+    /// fit estimate only; the runtime checks free VRAM before loading.
     gpu_total_mb: Option<u32>,
-    /// Background thread that computes `gpu_total_mb` (runs `nvidia-smi`).
-    /// Polled non-blockingly each frame; set to `None` once the result is adopted.
-    gpu_probe: Option<Receiver<Option<u32>>>,
+    nemotron_gpu_total_mib: Option<u32>,
+    /// This one-shot background probe is polled non-blockingly each frame.
+    gpu_probe: Option<Receiver<SpeechGpuTotals>>,
     /// The raw worker `status` state string from the most recent status event
     /// (e.g. `"opening"`, `"recording"`, `"transcribing"`, `"ready"`, …).
     /// Stored verbatim so `sync_tray` can pass it to `tray_state_for`, which
@@ -638,6 +657,7 @@ impl Default for WhisperDictateApp {
             background_task: None,
             background_task_label: None,
             gpu_total_mb: None,
+            nemotron_gpu_total_mib: None,
             gpu_probe: Some(spawn_gpu_probe()),
             last_worker_status_state: String::new(),
             pipeline_stage: None,

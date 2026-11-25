@@ -1,9 +1,21 @@
-use super::speech_advanced::{nemotron_hosted_multilingual_warning_active, stt_base_url_visible};
+use super::speech_advanced::stt_base_url_visible;
 use super::*;
 
 impl WhisperDictateApp {
     pub(in crate::ui) fn core_tab(&mut self, ui: &mut egui::Ui) {
         ui.heading("Speech recognition");
+        let stock_model_fits = self.whisper_stock_model_fits();
+        let fitting_custom_bytes = self
+            .whisper_custom_model_bytes()
+            .filter(|bytes| self.whisper_model_fits(*bytes));
+        let whisper_available = stock_model_fits || fitting_custom_bytes.is_some();
+        let engines = if whisper_available {
+            STT_BACKEND_OPTIONS
+        } else {
+            // Preserve an existing local selection; an unavailable engine is
+            // not offered as a new choice.
+            &STT_BACKEND_OPTIONS[1..]
+        };
 
         // Speech engine selector stays above all groups — it is the switch that
         // decides which group is active, so it must be visible unconditionally.
@@ -18,7 +30,7 @@ impl WhisperDictateApp {
                         ui,
                         "Speech engine",
                         &mut self.settings.stt_backend,
-                        STT_BACKEND_OPTIONS,
+                        engines,
                         "Choose the transcription engine. Cloud STT supports OpenAI, Groq, NVIDIA Nemotron 3.5 NIM, and other OpenAI-compatible endpoints; the saved config value remains openai for compatibility.",
                     );
                 });
@@ -26,7 +38,37 @@ impl WhisperDictateApp {
 
         ui.add_space(6.0);
 
-        self.whisper_group(ui);
+        let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
+        if backend == SttBackendMode::Whisper {
+            let capacity_warning = self.whisper_capacity_warning(&self.settings.model);
+            if self.cpu_speech_device_selected()
+                && (whisper_available || capacity_warning.is_none())
+            {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    "The saved CPU device cannot run local speech recognition. Select a GPU device in Advanced Speech settings.",
+                );
+            }
+            if let Some(warning) = capacity_warning {
+                ui.colored_label(ui.visuals().warn_fg_color, warning);
+                if self.gpu_probe.is_none() && ui.button("Select Cloud STT").clicked() {
+                    self.settings.stt_backend = "openai".to_owned();
+                }
+            } else {
+                self.show_whisper_model_warning(ui, backend);
+            }
+        } else if !whisper_available {
+            let message = if self.gpu_probe.is_some() {
+                "Checking for a GPU compatible with local Whisper…"
+            } else {
+                "Local Whisper is not offered: no compatible GPU has enough memory for a listed model or the configured custom GGML file."
+            };
+            ui.label(egui::RichText::new(message).weak());
+        }
+
+        if whisper_available {
+            self.whisper_group(ui, stock_model_fits, fitting_custom_bytes);
+        }
 
         ui.add_space(6.0);
 
@@ -39,23 +81,22 @@ impl WhisperDictateApp {
 
         ui.add_space(6.0);
 
-        self.general_group(ui);
+        self.general_group(ui, whisper_available);
     }
 
     /// The Whisper group: the VRAM-hinted model picker, the model/VRAM
     /// mismatch warning, and the in-app GGML downloader.
-    fn whisper_group(&mut self, ui: &mut egui::Ui) {
+    fn whisper_group(
+        &mut self,
+        ui: &mut egui::Ui,
+        stock_model_fits: bool,
+        custom_bytes: Option<u64>,
+    ) {
         let palette = ui_palette(&self.settings.ui_theme);
         let language = self.settings.ui_language.clone();
         let mode = SettingsMode::from_raw(&self.settings.ui_settings_mode);
         let backend = SttBackendMode::from_raw(&self.settings.stt_backend);
-        // --- Whisper group -----------------------------------------------
-        // The download section needs `&mut self` so it can't live inside the
-        // `scope_group`'s `FnOnce(&mut egui::Ui)` (which borrows self for the
-        // closure capture). Render the existing model picker via the group
-        // first, then drop the closure scope before invoking the section.
-        let model_downloads = self.whisper_model_downloads.clone();
-        let whisper_models = whisper_model_choices();
+        let model_downloads = &self.whisper_model_downloads;
         scope_group(
             ui,
             palette,
@@ -65,6 +106,17 @@ impl WhisperDictateApp {
                 if !setting_visible(mode, "model") {
                     return;
                 }
+                if let Some(bytes) = custom_bytes {
+                    let required = crate::model_capacity::whisper_required_mib(bytes);
+                    ui.label("Whisper model");
+                    ui.label(format!("Custom GGML file (VOICEPI_WHISPER_MODEL_PATH) — about {required} MiB VRAM required"));
+                    ui.end_row();
+                    return;
+                }
+                if !stock_model_fits {
+                    return;
+                }
+                let whisper_models = whisper_model_choices();
                 let gpu_total_mb = self.gpu_total_mb;
                 combo_model_vram(
                     ui,
@@ -80,16 +132,12 @@ impl WhisperDictateApp {
                         )
                     },
                     gpu_total_mb,
-                    "Larger models are more accurate but slower and use more VRAM. With Vulkan GPU acceleration, \
-                     models that don't fit your VRAM are greyed out; on CPU every model runs (large \
-                     ones just slower). The ~MB figure is the approximate VRAM at the int8_float16 \
-                     GPU default. Used only when STT backend is whisper.",
+                    "Estimated GPU memory required to load each model. Models larger than the \
+                     largest compatible GPU are disabled. The runtime checks available VRAM \
+                     again before loading. Local Whisper does not fall back to CPU.",
                 );
             },
         );
-        self.show_whisper_model_warning(ui, backend);
-        // In-app GGML model downloader. Sits next to the model
-        // picker so users discover it where they already pick a model.
         self.whisper_model_download_section(ui);
     }
 
@@ -132,10 +180,6 @@ impl WhisperDictateApp {
                 let provider = self.current_cloud_provider();
                 let stt_model_before = self.settings.stt_model.clone();
                 let mut nemotron_profile_selected = false;
-                let mut nemotron_in_process = provider == CloudProvider::Nemotron
-                    && crate::cloud_api::is_nemotron_in_process_endpoint(
-                        &self.settings.stt_base_url,
-                    );
                 if setting_visible(mode, "stt_model") {
                     if provider == CloudProvider::Custom {
                         text_enabled(
@@ -146,13 +190,30 @@ impl WhisperDictateApp {
                             "Model id your self-hosted OpenAI-compatible server expects, for example Systran/faster-whisper-large-v3.",
                         );
                     } else if provider == CloudProvider::Nemotron {
+                        let profiles = provider.labeled_model_options();
+                        let external_profiles = [
+                            profiles[0],
+                            (
+                                NEMOTRON_MULTI_STT_MODEL,
+                                "Multilingual / Auto — external endpoint required",
+                            ),
+                        ];
+                        let profiles = if self.nemotron_model_fits()
+                            || self.nemotron_external_multilingual_endpoint()
+                        {
+                            profiles
+                        } else if mode == SettingsMode::Advanced {
+                            &external_profiles
+                        } else {
+                            &profiles[..1]
+                        };
                         nemotron_profile_selected = combo_enabled_labeled_selection(
                             ui,
                             backend == SttBackendMode::Cloud,
                             "Nemotron profile",
                             &mut self.settings.stt_model,
-                            provider.labeled_model_options(),
-                            "Selecting English uses NVIDIA's hosted English endpoint. Selecting Multilingual / Auto uses the downloaded in-process model for local automatic detection across 40 locales. You can still edit the endpoint afterwards for a user-managed NIM or hosted function.",
+                            profiles,
+                            "English uses NVIDIA's hosted endpoint. Multilingual / Auto uses in-process Nemotron when a suitable GPU is available, or an external multilingual endpoint entered in Advanced settings.",
                         )
                         .is_some();
                     } else {
@@ -175,13 +236,10 @@ impl WhisperDictateApp {
                     if let Some(message) = self.route_selected_nemotron_profile() {
                         messages.push(message);
                     }
-                    nemotron_in_process = provider == CloudProvider::Nemotron
-                        && crate::cloud_api::is_nemotron_in_process_endpoint(
-                            &self.settings.stt_base_url,
-                        );
                 }
                 if setting_visible(mode, "stt_model")
                     && nemotron_local_model_editor_enabled(provider, &self.settings.stt_base_url)
+                    && self.nemotron_model_fits()
                 {
                     text_enabled(
                         ui,
@@ -219,32 +277,13 @@ impl WhisperDictateApp {
                         backend == SttBackendMode::Cloud,
                         "Cloud STT API URL",
                         &mut self.settings.stt_base_url,
-                        "Base URL for the selected cloud transcription provider. Fresh Nemotron selections use inproc://nemotron and download the verified local runtime/model automatically; local NIM uses grpc://localhost:50051. NVIDIA's public hosted URL is https://grpc.nvcf.nvidia.com:443 (English profile); a multilingual hosted function must be selected with ?function-id=<your NVCF function id>.",
+                        "Use inproc://nemotron only with a supported GPU. For an external Nemotron NIM use its gRPC URL, such as grpc://localhost:50051. NVIDIA's public hosted endpoint serves English; a multilingual hosted function requires ?function-id=<your NVCF function id>.",
                     );
                 }
-                if nemotron_in_process {
-                    ui.label("");
-                    ui.label(
-                        egui::RichText::new(
-                            "In-process mode: the official NeMo-Speech.cpp runtime and model download automatically on first start. Set VOICEPI_NEMOTRON_LIBRARY only for a custom local runtime.",
-                        )
-                        .color(palette.text_muted),
-                    );
-                    ui.end_row();
-                }
-                if nemotron_hosted_multilingual_warning_active(
-                    provider,
-                    &self.settings.stt_model,
-                    &self.settings.stt_base_url,
-                ) {
-                    ui.label("");
-                    ui.label(
-                        egui::RichText::new(
-                            "Hosted NVIDIA's default function is English-only. Add ?function-id=<multilingual NVCF function id>, or use grpc://localhost:50051 for a local type=multi NIM.",
-                        )
-                        .color(palette.warn_text),
-                    );
-                    ui.end_row();
+                let nemotron_in_process =
+                    nemotron_local_model_editor_enabled(provider, &self.settings.stt_base_url);
+                if backend == SttBackendMode::Cloud {
+                    self.show_nemotron_route_warning(ui, palette, provider, nemotron_in_process);
                 }
                 if setting_visible(mode, "stt_timeout_ms") {
                     numeric_enabled(
@@ -282,7 +321,7 @@ impl WhisperDictateApp {
 
     /// The general group: capture device, compute type, and the shared
     /// settings that apply to both engines.
-    fn general_group(&mut self, ui: &mut egui::Ui) {
+    fn general_group(&mut self, ui: &mut egui::Ui, whisper_available: bool) {
         let palette = ui_palette(&self.settings.ui_theme);
         let language = self.settings.ui_language.clone();
         let mode = SettingsMode::from_raw(&self.settings.ui_settings_mode);
@@ -293,6 +332,12 @@ impl WhisperDictateApp {
         let nemotron_in_process = backend == SttBackendMode::Cloud
             && self.current_cloud_provider() == CloudProvider::Nemotron
             && crate::cloud_api::is_nemotron_in_process_endpoint(&self.settings.stt_base_url);
+        let whisper_device_available = backend == SttBackendMode::Whisper
+            && (whisper_available
+                || (std::env::var_os(crate::ui::app::WHISPER_MODEL_PATH_ENV).is_none()
+                    && crate::whisper::model_manager::find(self.settings.model.trim())
+                        .is_some_and(|entry| self.whisper_model_fits(entry.size_bytes))));
+        let nemotron_device_available = nemotron_in_process && self.selected_nemotron_model_fits();
         scope_group(
             ui,
             palette,
@@ -302,7 +347,12 @@ impl WhisperDictateApp {
                 // Device (advanced; hidden by `setting_visible` in Simple mode)
                 // is extracted into `speech_device_row` in speech_advanced.rs
                 // so gating it doesn't grow this already-large file.
-                self.speech_device_row(ui, mode, backend, nemotron_in_process);
+                self.speech_device_row(
+                    ui,
+                    mode,
+                    whisper_device_available || nemotron_device_available,
+                    nemotron_in_process,
+                );
                 if setting_visible(mode, "audio_device") {
                     self.microphone_settings(ui);
                 }
@@ -666,6 +716,9 @@ impl WhisperDictateApp {
         let in_process = provider == CloudProvider::Nemotron
             && crate::cloud_api::is_nemotron_in_process_endpoint(&self.settings.stt_base_url);
         if in_process {
+            if !self.selected_nemotron_model_fits() || self.cpu_speech_device_selected() {
+                return;
+            }
             ui.label("");
             ui.label("No API key is used for in-process Nemotron.");
             ui.end_row();
@@ -757,13 +810,6 @@ impl WhisperDictateApp {
             }
         }
     }
-}
-
-pub(in crate::ui) fn local_device_selector_enabled(
-    backend: SttBackendMode,
-    nemotron_in_process: bool,
-) -> bool {
-    backend != SttBackendMode::Cloud || nemotron_in_process
 }
 
 pub(in crate::ui) fn nemotron_local_model_editor_enabled(
@@ -947,22 +993,6 @@ mod tests {
         assert_eq!(icon, egui_material_icons::icons::ICON_WARNING.codepoint);
         assert_eq!(color, palette.error_text);
         assert_eq!(text, "Cannot be used: device not found");
-    }
-
-    #[test]
-    fn in_process_nemotron_keeps_the_local_device_selector_enabled() {
-        assert!(local_device_selector_enabled(
-            SttBackendMode::Whisper,
-            false
-        ));
-        assert!(local_device_selector_enabled(SttBackendMode::Cloud, true));
-        assert!(!local_device_selector_enabled(SttBackendMode::Cloud, false));
-        let values =
-            crate::whisper::device_options::available_device_values_for_provider("nemotron");
-        assert!(values.contains(&"cpu"));
-        if crate::whisper::device_options::nemotron_cuda_runtime_available() {
-            assert!(values.contains(&"cuda"));
-        }
     }
 
     #[test]

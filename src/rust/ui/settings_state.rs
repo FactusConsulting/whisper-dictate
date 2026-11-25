@@ -264,17 +264,57 @@ impl WhisperDictateApp {
             .unwrap_or_else(|| CloudProvider::from_settings(&self.settings))
     }
 
+    pub(in crate::ui) fn nemotron_model_fits(&self) -> bool {
+        self.nemotron_model_bytes_fit(0)
+    }
+
+    pub(in crate::ui) fn selected_nemotron_model_fits(&self) -> bool {
+        let model = &self.settings.stt_model;
+        if !is_explicit_nemotron_model_path(model) {
+            return self.nemotron_model_fits();
+        }
+        std::fs::metadata(model.trim()).is_ok_and(|metadata| {
+            metadata.is_file()
+                && metadata.len() > 0
+                && self.nemotron_model_bytes_fit(metadata.len())
+        })
+    }
+
+    fn nemotron_model_bytes_fit(&self, bytes: u64) -> bool {
+        self.gpu_probe.is_none()
+            && (crate::whisper::device_options::nemotron_vulkan_runtime_available()
+                || crate::whisper::device_options::nemotron_cuda_runtime_available())
+            && self.nemotron_gpu_total_mib.is_some_and(|total| {
+                total >= crate::whisper::device_options::nemotron_required_mib(bytes)
+            })
+    }
+
+    pub(in crate::ui) fn cpu_speech_device_selected(&self) -> bool {
+        self.settings.device.trim().eq_ignore_ascii_case("cpu")
+    }
+
+    pub(in crate::ui) fn nemotron_external_multilingual_endpoint(&self) -> bool {
+        let endpoint = self.settings.stt_base_url.trim();
+        !endpoint.is_empty()
+            && crate::cloud_api::is_nemotron_grpc_endpoint("nemotron", endpoint)
+            && !crate::cloud_api::is_nemotron_in_process_endpoint(endpoint)
+            && (!crate::cloud_api::is_hosted_nemotron_endpoint(endpoint)
+                || crate::cloud_api::has_custom_function_id(endpoint))
+    }
+
     pub(in crate::ui) fn set_cloud_provider(&mut self, provider: CloudProvider) {
         let prior = self.current_cloud_provider();
         self.settings.stt_backend = "openai".to_owned();
         self.apply_cloud_provider_defaults(provider);
         if provider == CloudProvider::Nemotron && prior != CloudProvider::Nemotron {
-            // A fresh Nemotron selection is zero-config: the runtime downloads
-            // NVIDIA's verified NeMo-Speech.cpp archive/model on first use.
-            // Existing Nemotron sessions keep their explicit gRPC URL so a
-            // user running a local/hosted NIM is never silently redirected.
-            self.settings.stt_base_url = NEMOTRON_IN_PROCESS_STT_BASE_URL.to_owned();
-            self.settings.stt_model = provider.default_model().to_owned();
+            if self.nemotron_model_fits() {
+                self.settings.stt_base_url = NEMOTRON_IN_PROCESS_STT_BASE_URL.to_owned();
+                self.settings.stt_model = NEMOTRON_MULTI_STT_MODEL.to_owned();
+            } else {
+                self.settings.stt_base_url = NEMOTRON_HOSTED_STT_BASE_URL.to_owned();
+                self.settings.stt_model = NEMOTRON_ENGLISH_STT_MODEL.to_owned();
+                self.normalize_nemotron_profile_language();
+            }
         }
         let model = self.settings.stt_model.clone();
         self.record_nullable_selection("stt_model", &model);
@@ -329,6 +369,13 @@ impl WhisperDictateApp {
             } else if crate::dictate::backends::cloud_transcribe::is_nemotron_multilingual_model(
                 &self.settings.stt_model,
             ) {
+                if self.nemotron_external_multilingual_endpoint() {
+                    // Keep an explicitly configured external deployment.
+                    return None;
+                }
+                if !self.nemotron_model_fits() {
+                    return Some("Local Nemotron needs a compatible GPU with enough VRAM. To use Multilingual / Auto, enter a multilingual NIM or hosted function URL in Advanced Speech settings.".to_owned());
+                }
                 (
                     NEMOTRON_IN_PROCESS_STT_BASE_URL,
                     "Multilingual Nemotron profile selected; endpoint set to local in-process Nemotron. No API key is required.",

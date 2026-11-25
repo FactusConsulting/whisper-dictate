@@ -50,10 +50,6 @@ fn every_native_start_failure_has_a_stable_diagnostic_stage() {
             InProcessInstallError::ConfigLoadFailed("bad config".into()),
             "config-load",
         ),
-        (
-            InProcessInstallError::InvalidOptions("unsupported cuda".into()),
-            "runtime-options",
-        ),
         (InProcessInstallError::EmptyChord, "hotkey-config"),
         (
             InProcessInstallError::MissingBackend("missing model".into()),
@@ -78,35 +74,42 @@ fn every_native_start_failure_has_a_stable_diagnostic_stage() {
     }
 }
 
-#[cfg(not(feature = "whisper-rs-vulkan"))]
+#[cfg(all(
+    not(feature = "whisper-rs-vulkan"),
+    feature = "whisper-rs-local",
+    feature = "audio-capture",
+    feature = "rust-hotkeys",
+    feature = "rust-injection"
+))]
 #[test]
-fn gui_start_rejects_effective_vulkan_before_installing_runtime_resources() {
-    let _lock = crate::test_env_lock::lock_env();
-    let _device = super::test_support::EnvVarGuard::set("VOICEPI_DEVICE", "cpu");
-    let _backend = super::test_support::EnvVarGuard::set("VOICEPI_STT_BACKEND", "whisper");
+fn gui_start_rejects_local_whisper_on_a_build_without_vulkan() {
+    let dir = tempfile::tempdir().unwrap();
+    let model = dir.path().join("model.bin");
+    std::fs::write(&model, b"not loaded during startup").unwrap();
     let command = command(
         "legacy-worker-must-not-run",
         vec![
-            ("VOICEPI_DEVICE".into(), "vulkan".into()),
+            ("VOICEPI_DEVICE".into(), "auto".into()),
             ("VOICEPI_STT_BACKEND".into(), "whisper".into()),
+            ("VOICEPI_WHISPER_GPU".into(), "auto".into()),
+            (
+                "VOICEPI_WHISPER_MODEL_PATH".into(),
+                model.display().to_string(),
+            ),
         ],
     );
     let mut supervisor = RuntimeSupervisor::new();
 
     let error = supervisor
         .attempt_in_process_start(&command)
-        .expect_err("CPU-only GUI startup must reject an effective Vulkan request");
+        .expect_err("a CPU-only build cannot start local Whisper");
 
     assert!(matches!(
-        error,
-        InProcessInstallError::InvalidOptions(ref message)
-            if message.contains("cannot honor device=vulkan")
+        &error,
+        InProcessInstallError::MissingBackend(message)
+            if message.contains("requires Vulkan support")
     ));
-    assert_eq!(install_error_stage(&error), "runtime-options");
-    assert!(
-        supervisor.hotkey_handle.is_none(),
-        "validation must run before hotkey/audio/model resources are installed"
-    );
+    assert!(supervisor.hotkey_handle.is_none());
 }
 
 #[test]

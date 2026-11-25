@@ -43,6 +43,15 @@ impl WhisperDictateApp {
         };
         let stt_backend = effective("VOICEPI_STT_BACKEND", &self.saved_settings.stt_backend);
         let model = effective("VOICEPI_MODEL", &self.saved_settings.model);
+        // Auto-start can run before the background GPU probe completes.
+        // Runtime construction still checks the adapter before starting STT.
+        if SttBackendMode::from_raw(&stt_backend) == SttBackendMode::Whisper
+            && self.gpu_probe.is_none()
+        {
+            if let Some(warning) = self.whisper_capacity_warning(&model) {
+                return Some(warning);
+            }
+        }
         self.whisper_model_warning(&stt_backend, &model)
     }
 

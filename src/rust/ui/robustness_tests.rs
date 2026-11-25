@@ -155,69 +155,39 @@ fn append_runtime_log_via_app_trims_log_and_sets_scroll_flag() {
 // ── Fix 2: GPU probe channel polling ─────────────────────────────────────────
 
 #[test]
-fn gpu_probe_result_is_adopted_on_poll() {
-    let (tx, rx) = std::sync::mpsc::channel::<Option<u32>>();
+fn pending_gpu_probe_does_not_offer_local_whisper_until_a_model_fits() {
+    let (tx, rx) = std::sync::mpsc::channel();
     let mut app = test_app(AppSettings::default());
-    app.gpu_total_mb = None;
     app.gpu_probe = Some(rx);
+    let turbo = crate::whisper::model_manager::find("large-v3-turbo").unwrap();
+    let quality = crate::whisper::model_manager::find("large-v3").unwrap();
+    let turbo_mib = crate::model_capacity::whisper_required_mib(turbo.size_bytes);
 
-    // Before the sender fires, gpu_total_mb stays None.
-    // (We skip a real poll_runtime call to avoid spawning processes.)
+    app.poll_runtime();
+    assert!(!app.whisper_model_fits(turbo.size_bytes));
 
-    // Simulate the background thread completing.
-    tx.send(Some(8192)).unwrap();
+    tx.send(SpeechGpuTotals {
+        whisper_mib: Some(turbo_mib),
+        nemotron_mib: None,
+    })
+    .unwrap();
+    app.poll_runtime();
 
-    // Manually replicate what poll_runtime does for the gpu_probe.
-    if let Some(probe_rx) = &app.gpu_probe {
-        if let Ok(result) = probe_rx.try_recv() {
-            app.gpu_total_mb = result;
-            app.gpu_probe = None;
-        }
-    }
-
-    assert_eq!(app.gpu_total_mb, Some(8192));
-    assert!(
-        app.gpu_probe.is_none(),
-        "receiver should be dropped after result is taken"
-    );
+    assert!(app.whisper_model_fits(turbo.size_bytes));
+    assert!(!app.whisper_model_fits(quality.size_bytes));
 }
 
 #[test]
-fn gpu_probe_none_result_is_adopted_correctly() {
-    let (tx, rx) = std::sync::mpsc::channel::<Option<u32>>();
+fn disconnected_gpu_probe_does_not_leave_local_model_setup_waiting() {
+    let (tx, rx) = std::sync::mpsc::channel();
     let mut app = test_app(AppSettings::default());
     app.gpu_probe = Some(rx);
+    drop(tx);
 
-    tx.send(None).unwrap();
+    app.poll_runtime();
 
-    if let Some(probe_rx) = &app.gpu_probe {
-        if let Ok(result) = probe_rx.try_recv() {
-            app.gpu_total_mb = result;
-            app.gpu_probe = None;
-        }
-    }
-
-    assert_eq!(app.gpu_total_mb, None);
-    assert!(app.gpu_probe.is_none());
-}
-
-#[test]
-fn gpu_probe_not_yet_ready_leaves_state_unchanged() {
-    let (_tx, rx) = std::sync::mpsc::channel::<Option<u32>>();
-    let mut app = test_app(AppSettings::default());
-    app.gpu_total_mb = None;
-    app.gpu_probe = Some(rx);
-
-    // try_recv should return Err(Empty) — nothing changes.
-    if let Some(probe_rx) = &app.gpu_probe {
-        if let Ok(result) = probe_rx.try_recv() {
-            app.gpu_total_mb = result;
-            app.gpu_probe = None;
-        }
-    }
-
-    assert_eq!(app.gpu_total_mb, None);
-    assert!(app.gpu_probe.is_some(), "receiver should still be held");
+    let message = app.whisper_capacity_warning("large-v3").unwrap();
+    assert!(message.contains("compatible GPU"));
 }
 
 // ── Fix 3: Crash-streak advice (pure helper) ─────────────────────────────────

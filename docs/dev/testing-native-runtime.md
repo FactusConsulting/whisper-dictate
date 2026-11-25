@@ -130,7 +130,7 @@ Build the CLI with the feature set needed by the command under test, then
 exercise the native verbs directly:
 
 ```powershell
-cargo run --manifest-path src/rust/Cargo.toml --features whisper-rs-local -- transcribe-file .\recording.wav
+cargo run --manifest-path src/rust/Cargo.toml --features whisper-rs-vulkan -- transcribe-file .\recording.wav
 cargo run --manifest-path src/rust/Cargo.toml -- doctor
 cargo run --manifest-path src/rust/Cargo.toml -- setup --help
 ```
@@ -139,6 +139,32 @@ The Windows hardware-dependent checks are documented in
 [`scripts/manual-test/README.md`](../../scripts/manual-test/README.md). The
 Wayland end-to-end procedure is in
 [`wayland-user-smoke.md`](wayland-user-smoke.md).
+
+## GPU-only local transcription checks
+
+For the `transcribe-file` smoke check, first configure local Whisper, select
+Vulkan, and install a GGML model that fits the test GPU. The command tests
+inference, so it must run on a machine with a supported GPU. CPU-only CI can
+still run `wd self-test whisper-load` to verify that a GGML file loads. That
+diagnostic does not transcribe audio and is not evidence that local
+transcription is available.
+
+For manual coverage of local STT:
+
+1. On a Vulkan-capable machine, confirm a local Whisper model that fits loads
+   and transcribes. For Edda, follow the
+   [manual GGML setup](../STT_BACKENDS.md#use-an-edda-model-from-a-local-file)
+   and record a Danish utterance.
+2. On a machine with no supported GPU, verify that local inference cannot
+   start or reports a GPU requirement when used. Repeat with an existing
+   `device: "cpu"` setting and verify the app reports that CPU is unsupported
+   for local transcription.
+3. On a machine with enough total GPU memory for the model but not enough
+   free memory, verify the runtime reports a capacity error rather than
+   using CPU. Free memory or choose a smaller supported model, then retry.
+4. Confirm a hosted provider is recommended without changing the selected
+   route or uploading audio. Verify it remains available for explicit
+   configuration and that `local_only` still blocks remote STT routes.
 
 ## Physical hotkey focus matrix
 

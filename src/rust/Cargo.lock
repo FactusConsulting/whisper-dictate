@@ -5575,6 +5575,7 @@ dependencies = [
  "anyhow",
  "apple-native-keyring-store",
  "arboard",
+ "ash",
  "caseless",
  "clap",
  "cpal",

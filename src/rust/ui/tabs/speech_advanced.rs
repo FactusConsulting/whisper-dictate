@@ -4,7 +4,6 @@
 //! further: each helper here decides its own visibility via
 //! [`setting_visible`], so `core_tab` just calls it unconditionally.
 
-use super::speech::local_device_selector_enabled;
 use super::*;
 
 impl WhisperDictateApp {
@@ -14,39 +13,59 @@ impl WhisperDictateApp {
         &mut self,
         ui: &mut egui::Ui,
         mode: SettingsMode,
-        backend: SttBackendMode,
+        available: bool,
         nemotron_in_process: bool,
     ) {
-        if !setting_visible(mode, "device") {
+        if !available || !setting_visible(mode, "device") {
             return;
         }
-        // Filter the offered values by the compiled-in local GPU backends. On
-        // a CPU-only binary "vulkan" would silently fall back to CPU, so hide
-        // it entirely and append a footnote to the help text explaining why
-        // the menu is shorter (see crate::whisper::device_options for the
-        // full rationale).
-        let device_values = if nemotron_in_process {
-            crate::whisper::device_options::available_device_values_for_provider("nemotron")
-        } else {
-            crate::whisper::device_options::available_device_values()
-        };
-        let device_help = if nemotron_in_process {
-            "Local Nemotron inference device. auto tries its pinned Vulkan runtime, then CPU; choose CUDA only where offered by this platform.".to_owned()
-        } else {
-            format!(
-                "Local inference device. auto chooses a GPU when available, otherwise CPU. \
-                 Used by the local Whisper backend.{}",
-                crate::whisper::device_options::missing_device_footnote(),
-            )
-        };
-        combo_enabled_short(
+        let devices = local_speech_devices(nemotron_in_process);
+        combo_help_short(
             ui,
-            local_device_selector_enabled(backend, nemotron_in_process),
             "Device",
             &mut self.settings.device,
-            &device_values,
-            &device_help,
+            devices,
+            "GPU device for local speech recognition. Auto selects a compatible GPU. CPU inference is not supported.",
         );
+    }
+
+    pub(in crate::ui) fn show_nemotron_route_warning(
+        &self,
+        ui: &mut egui::Ui,
+        palette: UiPalette,
+        provider: CloudProvider,
+        in_process: bool,
+    ) {
+        if provider != CloudProvider::Nemotron {
+            return;
+        }
+        let checking = "Checking for a GPU compatible with local Nemotron…";
+        let warning = if in_process && !self.selected_nemotron_model_fits() {
+            if self.gpu_probe.is_some() {
+                checking
+            } else {
+                "The configured local Nemotron model needs a compatible GPU with enough memory and a valid model file. Select English for hosted Nemotron, or use a multilingual endpoint in Advanced Speech settings."
+            }
+        } else if in_process && self.cpu_speech_device_selected() {
+            "The saved CPU device cannot run local Nemotron. Select Auto in Advanced Speech settings."
+        } else if nemotron_hosted_multilingual_warning_active(
+            provider,
+            &self.settings.stt_model,
+            &self.settings.stt_base_url,
+        ) {
+            "NVIDIA's default hosted function is English-only. Add ?function-id=<multilingual NVCF function id>, or enter a gRPC URL for a multilingual NIM."
+        } else if !self.nemotron_model_fits() && !self.nemotron_external_multilingual_endpoint() {
+            if self.gpu_probe.is_some() {
+                checking
+            } else {
+                "In-process Nemotron requires a compatible GPU. For Multilingual / Auto, configure an external endpoint in Advanced Speech settings."
+            }
+        } else {
+            return;
+        };
+        ui.label("");
+        ui.colored_label(palette.warn_text, warning);
+        ui.end_row();
     }
 
     /// The "Linux keyboard layout" row (`xkb_layout`; advanced, non-Windows
@@ -128,6 +147,17 @@ impl WhisperDictateApp {
     }
 }
 
+fn local_speech_devices(nemotron_in_process: bool) -> &'static [&'static str] {
+    use crate::whisper::device_options::{DEVICE_AUTO, DEVICE_VULKAN};
+    // Auto can choose either pinned Nemotron GPU runtime. The probe does not
+    // promise both; existing explicit values remain readable.
+    if nemotron_in_process {
+        &[DEVICE_AUTO]
+    } else {
+        &[DEVICE_AUTO, DEVICE_VULKAN]
+    }
+}
+
 /// Whether the "Cloud STT API URL" row should render for `mode`. `stt_base_url`
 /// is schema-advanced (hidden by default in Simple mode), but two cases need
 /// it visible even there: a Custom provider has no other way to set its
@@ -197,6 +227,12 @@ pub(in crate::ui) fn local_only_blocks_cloud_note_text(ambient_env_override: boo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_speech_device_picker_only_offers_gpu_routes() {
+        assert_eq!(local_speech_devices(false), &["auto", "vulkan"]);
+        assert_eq!(local_speech_devices(true), &["auto"]);
+    }
 
     #[test]
     fn base_url_hidden_in_simple_for_openai_and_groq() {

@@ -256,10 +256,8 @@ fn combo_enabled_labeled_w(
 
 /// Model picker with accuracy/speed annotations and VRAM-aware grey-out.
 ///
-/// `hint(value) -> (note, approx_mb)`. When `gpu_total_mb` is `Some`, options
-/// needing more VRAM than the GPU has total are disabled (they can't fit even
-/// with an idle GPU) and explain why on hover. With `None` (CPU / non-NVIDIA)
-/// nothing is greyed out — every model runs, large ones just slower.
+/// `hint(value) -> (note, required_mib)`. Choices need a detected GPU whose
+/// total VRAM meets this estimate; runtime checks available VRAM again.
 #[allow(clippy::too_many_arguments)] // a labelled, VRAM-gated form row genuinely needs them
 pub(in crate::ui) fn combo_model_vram(
     ui: &mut egui::Ui,
@@ -291,14 +289,14 @@ pub(in crate::ui) fn combo_model_vram(
             .width(settings_control_width(ui))
             .show_ui(ui, |ui| {
                 for model in models {
-                    let (note, mb) = hint(model);
+                    let (note, required_mib) = hint(model);
                     let availability = availability(model);
-                    let fits = gpu_total_mb.is_none_or(|total| mb <= total);
+                    let fits = gpu_total_mb.is_some_and(|total| required_mib <= total);
                     let display = if note.is_empty() {
                         format!("{model} — {}", model_download_status(availability))
                     } else {
                         format!(
-                            "{model} — {note} (~{mb} MB) — {}",
+                            "{model} — {note} (~{required_mib} MiB) — {}",
                             model_download_status(availability)
                         )
                     };
@@ -309,7 +307,7 @@ pub(in crate::ui) fn combo_model_vram(
                         ui.add_enabled(fits, egui::Button::selectable(selected, display));
                     let response = match gpu_total_mb {
                         Some(total) if !fits => response.on_disabled_hover_text(format!(
-                            "Needs about {mb} MB VRAM; this GPU has {total} MB total."
+                            "Needs about {required_mib} MiB VRAM; this GPU has {total} MiB total."
                         )),
                         _ => response,
                     };

@@ -9,6 +9,7 @@ use super::speech::{
     nemotron_local_model_editor_enabled, nemotron_model_edit_requires_normalization,
 };
 
+#[cfg(all(feature = "nemotron-local", any(windows, target_os = "linux")))]
 #[test]
 fn multilingual_profile_route_keeps_the_custom_gguf_editor_available() {
     let mut app = test_app(AppSettings {
@@ -18,6 +19,7 @@ fn multilingual_profile_route_keeps_the_custom_gguf_editor_available() {
         stt_model: NEMOTRON_MULTI_STT_MODEL.to_owned(),
         ..Default::default()
     });
+    app.nemotron_gpu_total_mib = Some(4096);
 
     app.route_selected_nemotron_profile();
 

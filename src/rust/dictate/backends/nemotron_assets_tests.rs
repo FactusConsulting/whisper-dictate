@@ -148,50 +148,25 @@ fn arbitrary_model_paths_are_not_replaced_by_a_network_download() {
 }
 
 #[test]
-fn explicit_model_and_runtime_assets_bypass_the_bootstrap_cache() {
+fn explicit_model_bypasses_bootstrap_cache() {
     let directory = tempdir().expect("temporary explicit Nemotron assets");
     let model = directory.path().join("developer-model.gguf");
-    let library = directory.path().join(runtime_library_filename());
     fs::write(&model, b"developer model").expect("write explicit model");
-    fs::write(&library, b"developer runtime").expect("write explicit runtime");
 
     assert_eq!(
         ensure_model_path(&model.display().to_string(), true).expect("existing model"),
         model
     );
-    assert_eq!(
-        library_path_for_request(Some(&library.display().to_string()), "cpu")
-            .expect("existing runtime"),
-        library
-    );
-    assert_eq!(
-        ensure_library_path(Some(&library.display().to_string()), "cpu", true)
-            .expect("existing runtime"),
-        library
-    );
 }
 
 #[test]
-fn discovery_policy_can_force_the_pinned_cpu_fallback() {
-    assert!(should_reuse_discovered_runtime("cpu", true));
-    assert!(!should_reuse_discovered_runtime("cpu", false));
-    assert!(!should_reuse_discovered_runtime("cuda", true));
-}
-
-#[test]
-fn missing_explicit_assets_are_actionable_without_downloading() {
+fn missing_explicit_model_is_actionable_without_downloading() {
     let directory = tempdir().expect("temporary missing Nemotron assets");
     let model = directory.path().join("missing-model.gguf");
-    let library = directory.path().join(runtime_library_filename());
 
     let model_error = ensure_model_path(&model.display().to_string(), true)
         .expect_err("missing custom model must not be downloaded");
     assert!(model_error.to_string().contains("does not exist"));
-    let library_error = ensure_library_path(Some(&library.display().to_string()), "cpu", true)
-        .expect_err("missing explicit runtime must not be downloaded");
-    assert!(library_error
-        .to_string()
-        .contains("override does not exist"));
 }
 
 #[test]
@@ -227,9 +202,8 @@ fn runtime_archive_is_pinned_for_each_supported_platform() {
 
 #[test]
 fn runtime_cache_paths_are_variant_specific_and_keep_archive_extensions() {
-    let (_, cpu_archive, cpu_library) = runtime_paths(RUNTIME_CPU).expect("CPU cache paths");
-    let (_, vulkan_archive, vulkan_library) =
-        runtime_paths(RUNTIME_VULKAN).expect("Vulkan cache paths");
+    let (cpu_root, cpu_archive) = runtime_paths(RUNTIME_CPU).expect("CPU cache paths");
+    let (vulkan_root, vulkan_archive) = runtime_paths(RUNTIME_VULKAN).expect("Vulkan cache paths");
     assert_eq!(
         cpu_archive.file_name().and_then(|name| name.to_str()),
         Some(RUNTIME_CPU.filename)
@@ -238,19 +212,28 @@ fn runtime_cache_paths_are_variant_specific_and_keep_archive_extensions() {
         vulkan_archive.file_name().and_then(|name| name.to_str()),
         Some(RUNTIME_VULKAN.filename)
     );
-    assert!(cpu_library.ends_with(Path::new("bin").join(RUNTIME_CPU.library_filename)));
-    assert!(vulkan_library.ends_with(Path::new("bin").join(RUNTIME_VULKAN.library_filename)));
     if RUNTIME_CPU.filename != RUNTIME_VULKAN.filename {
-        assert_ne!(cpu_library, vulkan_library);
+        assert_ne!(cpu_root, vulkan_root);
     }
 }
 
 #[test]
-fn only_auto_and_cpu_may_reuse_a_discovered_runtime() {
-    assert!(may_reuse_discovered_runtime("auto"));
-    assert!(may_reuse_discovered_runtime("CPU"));
-    assert!(!may_reuse_discovered_runtime("vulkan"));
-    assert!(!may_reuse_discovered_runtime("cuda"));
+fn arbitrary_library_override_is_rejected_even_in_local_only_mode() {
+    if !Accelerator::Vulkan.available() {
+        return;
+    }
+    let directory = tempdir().expect("temporary explicit Nemotron library");
+    let library = directory.path().join(runtime_library_filename());
+    fs::write(&library, b"unknown runtime").expect("write explicit runtime");
+    let result = ensure_verified_runtime(
+        library.to_str(),
+        Accelerator::Vulkan,
+        true,
+        &AtomicBool::new(true),
+    );
+    assert!(
+        matches!(result, Err(error) if error.to_string().contains("not the verified vulkan runtime"))
+    );
 }
 
 #[test]

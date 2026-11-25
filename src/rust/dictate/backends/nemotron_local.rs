@@ -8,7 +8,7 @@
 //! contract.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -16,29 +16,27 @@ use anyhow::{Context, Result};
 
 use super::hallucination::{finalize_transcript, TranscriptionGuards};
 use super::nemotron_assets::{
-    ensure_library_path_while, ensure_model_path_while, library_path_for_request,
-    model_path_for_request,
+    custom_model_size, ensure_model_path_while, ensure_verified_runtime, model_path_for_request,
+    Accelerator,
 };
-use super::nemotron_ffi::NativeRecognizer;
+use super::nemotron_ffi::{NativeRecognizer, NativeRuntime};
 use super::profile_overrides::ProfileOverrideSlots;
 use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
+use crate::model_capacity::{query_gpus, vulkan::Adapters, GpuInfo};
+use crate::whisper::device_options::nemotron_required_mib;
 use crate::whisper::IdleUnloadingModel;
 
-/// Settings needed to construct the in-process recognizer.  The model and
-/// library paths are owned so idle unload/reload can recreate the recognizer
-/// without consulting process environment or a UI object.
+/// Settings needed to plan a local model and resolve a pinned GPU runtime
+/// when its recognizer is loaded or reloaded after an idle unload.
 #[derive(Debug, Clone)]
 pub struct NemotronLocalBackendConfig {
     pub model_path: PathBuf,
-    pub library_path: PathBuf,
-    pub gpu: i32,
-    pub accel_label: &'static str,
     pub language: Option<String>,
     pub initial_prompt: Option<String>,
     pub(crate) local_only: bool,
     pub(crate) model_request: String,
     pub(crate) library_override: Option<String>,
-    pub(crate) device: String,
+    device: DeviceRequest,
     /// The runtime supervisor owns this gate and clears it before teardown.
     /// First-run asset downloads use it as a cancellation token.
     pub(crate) runtime_active: Arc<AtomicBool>,
@@ -64,7 +62,7 @@ impl NemotronLocalTranscribeBackend {
         idle_timeout: Option<std::time::Duration>,
     ) -> Self {
         let config_for_loader = config.clone();
-        let resolved_accel = Arc::new(Mutex::new(config.accel_label));
+        let resolved_accel = Arc::new(Mutex::new("unknown"));
         let resolved_accel_for_loader = Arc::clone(&resolved_accel);
         let model = IdleUnloadingModel::new(
             move || {
@@ -272,31 +270,15 @@ pub(crate) fn config_from_settings(
     local_only: bool,
     runtime_active: Arc<AtomicBool>,
 ) -> Result<NemotronLocalBackendConfig> {
-    if !crate::whisper::device_options::is_device_supported_for_provider(device, "nemotron") {
-        return Err(anyhow::anyhow!(
-            "device value {:?} is not supported by the Nemotron runtime on this platform",
-            device.trim()
-        ));
-    }
+    let device = DeviceRequest::parse(device)?;
     let model_request = model.trim().to_owned();
     let library_override = library_override
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_owned);
     let model_path = model_path_for_request(&model_request)?;
-    let library_path = library_path_for_request(library_override.as_deref(), device)?;
-    let device = device.trim().to_owned();
-    let (gpu, accel_label) = match device.trim().to_ascii_lowercase().as_str() {
-        "cpu" => (-1, "cpu"),
-        "cuda" => (0, "cuda"),
-        "vulkan" => (0, "vulkan"),
-        _ => (0, "unknown"),
-    };
     Ok(NemotronLocalBackendConfig {
         model_path,
-        library_path,
-        gpu,
-        accel_label,
         language,
         initial_prompt,
         local_only,
@@ -307,82 +289,181 @@ pub(crate) fn config_from_settings(
     })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DeviceRequest {
+    Auto,
+    Explicit(Accelerator),
+}
+
+impl DeviceRequest {
+    fn parse(value: &str) -> Result<Self> {
+        let device = value.trim();
+        let request = match device.to_ascii_lowercase().as_str() {
+            "auto" => return Ok(Self::Auto),
+            "vulkan" => Accelerator::Vulkan,
+            "cuda" => Accelerator::Cuda,
+            "cpu" => anyhow::bail!(
+                "CPU inference is not allowed for local Nemotron; choose a GPU or a hosted speech provider"
+            ),
+            _ => anyhow::bail!("device value {device:?} is not supported by local Nemotron"),
+        };
+        if !request.available() {
+            anyhow::bail!(
+                "device value {device:?} is not supported by local Nemotron on this platform"
+            );
+        }
+        Ok(Self::Explicit(request))
+    }
+
+    fn candidates(self) -> [Option<Accelerator>; 2] {
+        match self {
+            Self::Auto => [Some(Accelerator::Vulkan), Some(Accelerator::Cuda)],
+            Self::Explicit(accelerator) => [Some(accelerator), None],
+        }
+    }
+}
+
+enum GpuCapacity {
+    Vulkan(Adapters),
+    Cuda(Vec<GpuInfo>),
+}
+
+impl GpuCapacity {
+    fn probe(accelerator: Accelerator) -> Self {
+        match accelerator {
+            Accelerator::Vulkan => Self::Vulkan(Adapters::probe()),
+            Accelerator::Cuda => Self::Cuda(query_gpus()),
+        }
+    }
+
+    fn has_capacity(&self, required_mib: u32) -> bool {
+        match self {
+            Self::Vulkan(adapters) => adapters.has_capacity(required_mib),
+            Self::Cuda(gpus) => gpus
+                .iter()
+                .any(|gpu| gpu.total_mb >= required_mib && gpu.free_mb >= required_mib),
+        }
+    }
+
+    fn capacity(&self, description: &std::ffi::CStr) -> Option<(u32, u32)> {
+        match self {
+            Self::Vulkan(adapters) => adapters.capacity(description, None),
+            Self::Cuda(gpus) => cuda_capacity(gpus, description.to_bytes()),
+        }
+    }
+}
+
+/// Maximum total memory among devices the pinned local runtime can try.
+pub(crate) fn local_gpu_total_mib(adapters: &Adapters) -> Option<u32> {
+    let vulkan = Accelerator::Vulkan;
+    let vulkan_mib = if vulkan.available() && driver_enabled(vulkan) {
+        adapters.max_total_mib()
+    } else {
+        0
+    };
+    let cuda = Accelerator::Cuda;
+    let cuda_mib = if cuda.available() && driver_enabled(cuda) {
+        query_gpus()
+            .into_iter()
+            .map(|gpu| gpu.total_mb)
+            .max()
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    let total = vulkan_mib.max(cuda_mib);
+    (total > 0).then_some(total)
+}
+
+fn driver_enabled(accelerator: Accelerator) -> bool {
+    match accelerator {
+        Accelerator::Vulkan => {
+            !std::env::var_os("GGML_VK_VISIBLE_DEVICES").is_some_and(|value| value.is_empty())
+        }
+        Accelerator::Cuda => !std::env::var_os("CUDA_VISIBLE_DEVICES")
+            .is_some_and(|value| value.is_empty() || value == "-1"),
+    }
+}
+
+fn cuda_capacity(gpus: &[GpuInfo], description: &[u8]) -> Option<(u32, u32)> {
+    // NVML's nvidia-smi index is not guaranteed to equal a CUDA ordinal.
+    // When multiple GPUs share a description, every possible match must fit.
+    gpus.iter()
+        .filter(|gpu| gpu.name.as_bytes() == description)
+        .map(|gpu| (gpu.total_mb, gpu.free_mb))
+        .reduce(|a, b| (a.0.min(b.0), a.1.min(b.1)))
+}
+
 fn load_native_recognizer(
     config: &NemotronLocalBackendConfig,
 ) -> Result<(NativeRecognizer, &'static str)> {
-    let model_path = ensure_model_path_while(
-        &config.model_request,
-        config.local_only,
-        config.runtime_active.as_ref(),
-    )?;
-    let primary = || -> Result<(NativeRecognizer, &'static str)> {
-        let library_path = ensure_library_path_while(
-            config.library_override.as_deref(),
-            &config.device,
-            config.local_only,
-            true,
-            config.runtime_active.as_ref(),
-        )?;
-        let primary_accel = primary_accel_label(&config.device, config.accel_label, &library_path);
-        NativeRecognizer::new(&library_path, &model_path, config.gpu)
-            .map(|recognizer| (recognizer, primary_accel))
-    };
-    if !config.device.eq_ignore_ascii_case("auto") {
-        return primary();
-    }
-    match primary() {
-        Ok(recognizer) => Ok(recognizer),
-        Err(primary_error) => {
-            crate::diag::log!(
-                "[nemotron] auto accelerator unavailable ({primary_error:#}); retrying with CPU"
-            );
-            let library_path = ensure_library_path_while(
+    let planned_model = model_path_for_request(&config.model_request)?;
+    let required_mib =
+        nemotron_required_mib(custom_model_size(&config.model_request, &planned_model)?);
+    let mut failure = None;
+    for accelerator in config.device.candidates().into_iter().flatten() {
+        if !config.runtime_active.load(Ordering::Acquire) {
+            anyhow::bail!("loading local Nemotron was cancelled because the runtime stopped");
+        }
+        if !accelerator.available() || !driver_enabled(accelerator) {
+            continue;
+        }
+        let capacity = GpuCapacity::probe(accelerator);
+        if !capacity.has_capacity(required_mib) {
+            continue;
+        }
+        let try_runtime = || -> Result<NativeRuntime> {
+            let verified = ensure_verified_runtime(
                 config.library_override.as_deref(),
-                "cpu",
+                accelerator,
                 config.local_only,
-                cpu_fallback_allows_discovery(config.library_override.as_deref()),
                 config.runtime_active.as_ref(),
             )?;
-            NativeRecognizer::new(&library_path, &model_path, -1)
-                .map(|recognizer| (recognizer, "cpu"))
-                .with_context(|| {
-                    format!(
-                        "Nemotron auto accelerator failed ({primary_error:#}); CPU fallback failed"
-                    )
-                })
+            let runtime = NativeRuntime::load(&verified)?;
+            runtime.select_gpu(required_mib, |name| capacity.capacity(name))?;
+            Ok(runtime)
+        };
+        let runtime = match try_runtime() {
+            Ok(runtime) => runtime,
+            Err(error) => {
+                failure = Some(error);
+                continue;
+            }
+        };
+        let model_path = ensure_model_path_while(
+            &config.model_request,
+            config.local_only,
+            config.runtime_active.as_ref(),
+        )?;
+        if !config.runtime_active.load(Ordering::Acquire) {
+            anyhow::bail!("loading local Nemotron was cancelled because the runtime stopped");
+        }
+        let required_mib =
+            nemotron_required_mib(custom_model_size(&config.model_request, &model_path)?);
+        let capacity = GpuCapacity::probe(accelerator);
+        let try_recognizer = || -> Result<NativeRecognizer> {
+            let gpu = runtime.select_gpu(required_mib, |name| capacity.capacity(name))?;
+            runtime.recognize_with(&model_path, gpu).with_context(|| {
+                format!(
+                    "initialize local Nemotron on {} GPU {gpu}",
+                    accelerator.label()
+                )
+            })
+        };
+        match try_recognizer() {
+            Ok(recognizer) => return Ok((recognizer, accelerator.label())),
+            Err(error) => failure = Some(error),
         }
     }
-}
-
-fn cpu_fallback_allows_discovery(library_override: Option<&str>) -> bool {
-    // An explicit override is the user's requested runtime and is resolved
-    // before discovery. Without one, a failed auto-discovered library must
-    // not win again over the verified CPU fallback.
-    library_override.is_some()
-}
-
-fn primary_accel_label(
-    device: &str,
-    configured: &'static str,
-    library_path: &Path,
-) -> &'static str {
-    if device.eq_ignore_ascii_case("auto") {
-        // macOS maps auto directly to CPU. On platforms that ship Vulkan,
-        // report it only for our pinned runtime: an override or a library
-        // discovered beside the executable may be a CPU, Vulkan, or CUDA
-        // build, and the C ABI does not expose which one was loaded.
-        if cfg!(target_os = "macos") {
-            "cpu"
-        } else if library_path_for_request(None, "vulkan")
-            .is_ok_and(|pinned| pinned == library_path)
-        {
-            "vulkan"
-        } else {
-            "unknown"
-        }
-    } else {
-        configured
-    }
+    let message = || {
+        format!(
+            "local Nemotron requires a verified GPU runtime and one GPU with at least {required_mib} MiB total and free VRAM; choose a hosted speech provider if no suitable GPU is available"
+        )
+    };
+    Err(match failure {
+        Some(error) => error.context(message()),
+        None => anyhow::anyhow!(message()),
+    })
 }
 
 #[cfg(test)]

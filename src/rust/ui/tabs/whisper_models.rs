@@ -16,11 +16,69 @@ use crate::whisper::model_manager::{self, ModelEntry};
 use crate::whisper::models_cli::human_bytes;
 
 impl WhisperDictateApp {
+    /// The settings UI checks total VRAM. Loading the model also needs enough
+    /// currently free memory on the same GPU, which the runtime verifies.
+    pub(in crate::ui) fn whisper_model_fits(&self, file_bytes: u64) -> bool {
+        self.gpu_probe.is_none()
+            && self.gpu_total_mb.is_some_and(|total| {
+                total >= crate::model_capacity::whisper_required_mib(file_bytes)
+            })
+    }
+
+    pub(in crate::ui) fn whisper_stock_model_fits(&self) -> bool {
+        model_manager::visible_catalog().any(|entry| self.whisper_model_fits(entry.size_bytes))
+    }
+
+    pub(in crate::ui) fn whisper_custom_model_bytes(&self) -> Option<u64> {
+        let path = std::env::var(crate::ui::app::WHISPER_MODEL_PATH_ENV).ok()?;
+        let metadata = std::fs::metadata(path.trim()).ok()?;
+        (metadata.is_file() && metadata.len() > 0).then(|| metadata.len())
+    }
+
+    /// Explain hardware or environment blockers before offering model setup or
+    /// telling the user to download anything for the active selection.
+    pub(in crate::ui) fn whisper_capacity_warning(&self, model: &str) -> Option<String> {
+        if self.gpu_probe.is_some() {
+            return Some("Checking for a GPU compatible with local Whisper…".to_owned());
+        }
+        let Some(total) = self.gpu_total_mb else {
+            return Some(
+                "Local Whisper needs a compatible GPU. None was detected by this build. Use a compatible GPU or explicitly choose a hosted engine in Speech settings."
+                    .to_owned(),
+            );
+        };
+
+        let custom = std::env::var_os(crate::ui::app::WHISPER_MODEL_PATH_ENV).is_some();
+        let bytes = if custom {
+            let Some(bytes) = self.whisper_custom_model_bytes() else {
+                return Some("VOICEPI_WHISPER_MODEL_PATH must point to an existing, non-empty GGML model file. Fix or remove it before recording.".to_owned());
+            };
+            bytes
+        } else {
+            let Some(entry) = model_manager::find(model.trim()) else {
+                return (!model.trim().is_empty()).then(|| {
+                    format!("{model} is not a supported Whisper model. Choose a fitting model or explicitly select a hosted engine in Speech settings.")
+                });
+            };
+            entry.size_bytes
+        };
+        let required = crate::model_capacity::whisper_required_mib(bytes);
+        (total < required).then(|| {
+            let label = if custom { "The custom GGML model" } else { model };
+            format!(
+                "{label} needs about {required} MiB of GPU memory. The largest compatible GPU has {total} MiB total. Choose a smaller model or explicitly select a hosted engine in Speech settings."
+            )
+        })
+    }
+
     /// Render the "Whisper model download" section inside the Speech tab's
     /// Whisper scope group. Designed to be cheap to call every frame
     /// the only state mutation paths are click handlers + the shared
     /// `WhisperModelDownloads` snapshot.
     pub(in crate::ui) fn whisper_model_download_section(&mut self, ui: &mut egui::Ui) {
+        if !self.whisper_stock_model_fits() {
+            return;
+        }
         ui.add_space(8.0);
         ui.label(egui::RichText::new("Whisper model downloads").strong());
         ui.label(
@@ -63,7 +121,6 @@ impl WhisperDictateApp {
         // tiny.en model CI downloads — never show up as a user choice.
         for entry in model_manager::visible_catalog() {
             self.render_whisper_model_row(ui, entry, any_running, downloads_blocked);
-            ui.add_space(2.0);
         }
         if let Ok(dir) = model_manager::models_cache_dir() {
             ui.add_space(4.0);
@@ -82,6 +139,10 @@ impl WhisperDictateApp {
         any_running: bool,
         local_only: bool,
     ) {
+        if !self.whisper_model_fits(entry.size_bytes) {
+            return;
+        }
+        ui.add_space(2.0);
         let job = self.whisper_model_downloads.job(entry.name);
         if let Some(status) =
             cancelled_download_completion_status(&self.settings_status, entry.name, job.as_ref())

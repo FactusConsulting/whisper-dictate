@@ -262,7 +262,7 @@ tokens. Treat Windows trace logs as sensitive and share them only privately.
 | Desktop settings and runtime control | Yes | Yes | Yes |
 | Global push-to-talk | Native drivers | evdev with device permission | Native X11 listener |
 | Native audio capture | Yes | Yes | Yes |
-| Local whisper.cpp | CPU or Vulkan | CPU in published package | CPU in published package |
+| Local whisper.cpp | Vulkan GPU | Vulkan GPU with a `whisper-rs-vulkan` build | Vulkan GPU with a `whisper-rs-vulkan` build |
 | Cloud OpenAI-compatible STT | Yes | Yes | Yes |
 | Text injection | Native type/paste | Helper chain | Native X11 helpers |
 | Restore a previous target | Yes | No portable compositor API | Yes |

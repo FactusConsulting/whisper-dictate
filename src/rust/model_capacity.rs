@@ -3,6 +3,60 @@ use std::process::Command;
 use anyhow::Result;
 use serde::Serialize;
 
+const MIB: u64 = 1 << 20;
+const WHISPER_TURBO_F16_MIB: u32 = 2816;
+const WHISPER_LARGE_F16_MIB: u32 = 4352;
+const WHISPER_VULKAN_SOURCE: &str = "whisper-vulkan";
+const NVIDIA_SMI_SOURCE: &str = "nvidia-smi";
+
+/// Capacity for a single adapter. `index` is Whisper's GPU ordinal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SpeechGpu {
+    pub index: i32,
+    pub total_mib: u32,
+    pub free_mib: u32,
+}
+
+/// Estimate the space for weights plus compute, state, and driver buffers
+/// from the actual GGML file length, not its filename or selected preset.
+pub(crate) fn whisper_required_mib(file_bytes: u64) -> u32 {
+    let weights_mib = file_bytes.div_ceil(MIB);
+    let required_mib = match file_bytes {
+        // Small models require at least 1 GiB. Stock and Edda Turbo F16,
+        // including the ~1.62 GB stock file, reach the 2.75 GiB ceiling.
+        ..=1_650_000_000 => (weights_mib * 2).clamp(1024, u64::from(WHISPER_TURBO_F16_MIB)),
+        // Stock and Edda Large F16 reach the 4.25 GiB ceiling.
+        ..=3_150_000_000 => (weights_mib + 1536).min(u64::from(WHISPER_LARGE_F16_MIB)),
+        // Don't cap the headroom for larger custom files.
+        _ => weights_mib + weights_mib.div_ceil(2).max(1536),
+    };
+    u32::try_from(required_mib).unwrap_or(u32::MAX)
+}
+
+/// Don't split models between GPUs. Prefer the adapter with the most
+/// usable headroom, and use the lowest ordinal to break a tie.
+#[cfg(any(feature = "whisper-rs-local", test))]
+pub(crate) fn select_whisper_gpu(gpus: &[SpeechGpu], required_mib: u32) -> Option<i32> {
+    gpus.iter()
+        .filter(|gpu| gpu.total_mib >= required_mib && gpu.free_mib >= required_mib)
+        .max_by_key(|gpu| (gpu.free_mib, std::cmp::Reverse(gpu.index)))
+        .map(|gpu| gpu.index)
+}
+
+pub(crate) fn whisper_gpus() -> Vec<SpeechGpu> {
+    #[cfg(feature = "whisper-rs-vulkan")]
+    {
+        vulkan::Adapters::probe().whisper_gpus()
+    }
+    #[cfg(not(feature = "whisper-rs-vulkan"))]
+    {
+        Vec::new()
+    }
+}
+
+#[cfg(any(feature = "whisper-rs-vulkan", feature = "nemotron-local"))]
+pub(crate) mod vulkan;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct GpuInfo {
     pub index: usize,
@@ -32,35 +86,19 @@ const MODEL_PROFILES: &[ModelProfile] = &[
     ModelProfile {
         name: "Whisper large-v3-turbo",
         category: "stt",
-        required_free_mb: 1800,
+        required_free_mb: WHISPER_TURBO_F16_MIB,
         setting_hint:
-            "VOICEPI_STT_BACKEND=whisper; VOICEPI_MODEL=large-v3-turbo; VOICEPI_DEVICE=auto",
-        note: "Fast default; model-file quantisation determines precision.",
+            "VOICEPI_STT_BACKEND=whisper; VOICEPI_MODEL=large-v3-turbo; VOICEPI_WHISPER_GPU=vulkan",
+        note: "Stock and Edda Turbo F16 weights, plus Vulkan working memory.",
     },
     ModelProfile {
-        name: "Whisper large-v3 quantized",
+        name: "Whisper large-v3",
         category: "stt",
-        required_free_mb: 3200,
-        setting_hint: "VOICEPI_STT_BACKEND=whisper; VOICEPI_MODEL=large-v3; VOICEPI_DEVICE=auto",
-        note: "Full Whisper model; model-file quantisation determines precision.",
+        required_free_mb: WHISPER_LARGE_F16_MIB,
+        setting_hint:
+            "VOICEPI_STT_BACKEND=whisper; VOICEPI_MODEL=large-v3; VOICEPI_WHISPER_GPU=vulkan",
+        note: "Stock and Edda Large F16 weights, plus Vulkan working memory.",
     },
-    ModelProfile {
-        name: "Whisper large-v3 (5 GB headroom)",
-        category: "stt",
-        required_free_mb: 5000,
-        setting_hint: "VOICEPI_STT_BACKEND=whisper; VOICEPI_MODEL=large-v3; VOICEPI_DEVICE=vulkan",
-        note: "Conservative headroom estimate for the native Vulkan path.",
-    },
-    ModelProfile {
-        name: "Whisper large-v3 (8 GB headroom)",
-        category: "stt",
-        required_free_mb: 8000,
-        setting_hint: "VOICEPI_STT_BACKEND=whisper; VOICEPI_MODEL=large-v3; VOICEPI_DEVICE=vulkan",
-        note: "Extra headroom for native Vulkan operation alongside other GPU workloads.",
-    },
-    // The NVIDIA Parakeet STT entries are gone from this
-    // table along with the backend itself; only Whisper STT and Ollama
-    // post-processing profiles remain.
     ModelProfile {
         name: "Ollama Qwen2.5 3B",
         category: "post",
@@ -102,7 +140,14 @@ pub struct ModelFitReport {
 }
 
 pub fn handle_command(json: bool) -> Result<()> {
-    let gpus = query_gpus();
+    let mut gpus = query_gpus();
+    gpus.extend(whisper_gpus().into_iter().map(|gpu| GpuInfo {
+        index: gpu.index as usize,
+        name: "Whisper Vulkan adapter".to_owned(),
+        total_mb: gpu.total_mib,
+        free_mb: gpu.free_mib,
+        source: WHISPER_VULKAN_SOURCE,
+    }));
     if json {
         println!("{}", serde_json::to_string(&capacity_report_json(&gpus))?);
     } else {
@@ -129,30 +174,40 @@ pub fn query_gpus() -> Vec<GpuInfo> {
 }
 
 pub fn estimate_model_fits(gpus: &[GpuInfo]) -> Vec<ModelFit> {
-    let best_total = gpus.iter().map(|gpu| gpu.total_mb).max().unwrap_or(0);
-    let best_free = gpus.iter().map(|gpu| gpu.free_mb).max().unwrap_or(0);
     MODEL_PROFILES
         .iter()
         .cloned()
         .map(|profile| {
             let required = profile.required_free_mb;
+            let source = if profile.category == "stt" {
+                WHISPER_VULKAN_SOURCE
+            } else {
+                NVIDIA_SMI_SOURCE
+            };
+            let (best_total, best_free) = gpus.iter().filter(|gpu| gpu.source == source).fold(
+                (0, 0),
+                |(total, free), gpu| {
+                    let eligible_free = if gpu.total_mb >= required { gpu.free_mb } else { 0 };
+                    (total.max(gpu.total_mb), free.max(eligible_free))
+                },
+            );
             let (status, detail) = if best_free >= required {
                 (
                     "ok",
-                    format!("fits now; needs about {required} MB free VRAM"),
+                    format!("fits now; needs about {required} MiB free VRAM"),
                 )
             } else if best_total >= required {
                 (
                     "free-vram",
                     format!(
-                        "GPU is large enough, but only {best_free} MB is free; stop other GPU processes to reach about {required} MB"
+                        "GPU is large enough, but only {best_free} MiB is free; stop other GPU processes to reach about {required} MiB"
                     ),
                 )
             } else {
                 (
                     "too-small",
                     format!(
-                        "needs about {required} MB free VRAM; largest GPU has {best_total} MB total"
+                        "needs about {required} MiB free VRAM; largest compatible GPU has {best_total} MiB total"
                     ),
                 )
             };
@@ -168,12 +223,15 @@ pub fn estimate_model_fits(gpus: &[GpuInfo]) -> Vec<ModelFit> {
 pub fn capacity_report(gpus: &[GpuInfo]) -> String {
     let mut lines = Vec::new();
     if gpus.is_empty() {
-        lines.push("GPU capacity: no NVIDIA CUDA GPU detected".to_owned());
+        lines.push(
+            "GPU capacity: no compatible Whisper Vulkan or NVIDIA reporting adapter found"
+                .to_owned(),
+        );
     } else {
         lines.push("GPU capacity:".to_owned());
         for gpu in gpus {
             lines.push(format!(
-                "  [{}] {}: {} MB free / {} MB total ({})",
+                "  [{}] {}: {} MiB free / {} MiB total ({})",
                 gpu.index, gpu.name, gpu.free_mb, gpu.total_mb, gpu.source
             ));
         }
@@ -187,7 +245,7 @@ pub fn capacity_report(gpus: &[GpuInfo]) -> String {
             _ => "NO",
         };
         lines.push(format!(
-            "  {marker:<9} {:<34} ~{} MB  {}",
+            "  {marker:<9} {:<34} ~{} MiB  {}",
             fit.profile.name, fit.profile.required_free_mb, fit.profile.setting_hint
         ));
         lines.push(format!("            {}", fit.detail));
@@ -234,7 +292,7 @@ fn parse_nvidia_smi_row(row: &str) -> Option<GpuInfo> {
         name: parts[1].to_owned(),
         total_mb: parse_mb(parts[2])?,
         free_mb: parse_mb(parts[3])?,
-        source: "nvidia-smi",
+        source: NVIDIA_SMI_SOURCE,
     })
 }
 
@@ -253,6 +311,75 @@ mod tests {
     use super::*;
 
     #[test]
+    fn whisper_requirements_scale_from_measured_weight_bytes() {
+        assert_eq!(whisper_required_mib(76_000_000), 1024);
+        assert_eq!(whisper_required_mib(1_500_000_000), 2816);
+        assert_eq!(whisper_required_mib(1_600_000_000), 2816);
+        assert_eq!(whisper_required_mib(1_624_555_275), 2816);
+        assert_eq!(whisper_required_mib(3_095_033_483), 4352);
+        assert_eq!(whisper_required_mib(3_100_000_000), 4352);
+        assert!(whisper_required_mib(4_000_000_000) > 4352);
+        assert_eq!(whisper_required_mib(u64::MAX), u32::MAX);
+    }
+
+    #[test]
+    fn whisper_requires_both_total_capacity_and_free_memory() {
+        let gpus = [
+            SpeechGpu {
+                index: 0,
+                total_mib: 8192,
+                free_mib: 2048,
+            },
+            SpeechGpu {
+                index: 1,
+                total_mib: 2048,
+                free_mib: 4096,
+            },
+            SpeechGpu {
+                index: 2,
+                total_mib: 4096,
+                free_mib: 4096,
+            },
+        ];
+        assert_eq!(select_whisper_gpu(&gpus[..2], 4096), None);
+        assert_eq!(select_whisper_gpu(&gpus, 4096), Some(2));
+    }
+
+    #[test]
+    fn whisper_selects_best_free_adapter_without_pooling() {
+        let gpus = [
+            SpeechGpu {
+                index: 5,
+                total_mib: 8192,
+                free_mib: 4096,
+            },
+            SpeechGpu {
+                index: 3,
+                total_mib: 8192,
+                free_mib: 6144,
+            },
+            SpeechGpu {
+                index: 1,
+                total_mib: 6144,
+                free_mib: 6144,
+            },
+        ];
+        assert_eq!(select_whisper_gpu(&gpus, 4096), Some(1));
+        assert_eq!(select_whisper_gpu(&gpus, 6145), None);
+    }
+
+    #[cfg(not(feature = "whisper-rs-vulkan"))]
+    #[test]
+    fn whisper_without_vulkan_cannot_offer_a_gpu() {
+        let gpus = whisper_gpus();
+        assert!(gpus.is_empty());
+        assert_eq!(
+            select_whisper_gpu(&gpus, whisper_required_mib(76_000_000)),
+            None
+        );
+    }
+
+    #[test]
     fn parses_nvidia_smi_csv_rows() {
         let gpus = parse_nvidia_smi_csv("0, NVIDIA RTX 5060 Ti, 16376, 12000\nbad\n");
 
@@ -269,30 +396,31 @@ mod tests {
     }
 
     #[test]
-    fn estimates_model_fit_from_free_and_total_vram() {
-        // Profiles in declaration order
-        // with a 10 000 MB GPU that has 4 000 MB free:
-        //   0: Whisper large-v3-turbo        (1.8 GB) — fits free  → "ok"
-        //   1: Whisper large-v3 quantized    (3.2 GB) — fits free  → "ok"
-        //   2: Whisper large-v3 float16      (5.0 GB) — fits total → "free-vram"
-        //   3: Whisper large-v3 fp16 hi-beam (8.0 GB) — fits total → "free-vram"
-        //   4: Ollama Qwen2.5 3B             (4.5 GB) — fits total → "free-vram"
-        //   5: Ollama Qwen2.5 7B Q4          (8.0 GB) — fits total → "free-vram"
-        //   6: Ollama Qwen2.5 14B Q4         (14  GB) — too small  → "too-small"
-        let gpus = vec![GpuInfo {
+    fn estimates_whisper_from_vulkan_and_ollama_from_nvidia_diagnostics() {
+        let mut gpus = vec![GpuInfo {
             index: 0,
-            name: "GPU".to_owned(),
+            name: "NVIDIA GPU".to_owned(),
             total_mb: 10_000,
-            free_mb: 4_000,
-            source: "test",
+            free_mb: 5000,
+            source: NVIDIA_SMI_SOURCE,
         }];
-
         let fits = estimate_model_fits(&gpus);
+        assert_eq!(fits[0].status, "too-small");
+        assert_eq!(fits[1].status, "too-small");
+        assert_eq!(fits[2].status, "ok");
 
+        gpus.push(GpuInfo {
+            index: 0,
+            name: "Whisper Vulkan adapter".to_owned(),
+            total_mb: 8192,
+            free_mb: 4096,
+            source: WHISPER_VULKAN_SOURCE,
+        });
+        let fits = estimate_model_fits(&gpus);
         assert_eq!(fits[0].status, "ok");
-        assert_eq!(fits[1].status, "ok");
-        assert_eq!(fits[2].status, "free-vram");
-        assert_eq!(fits[6].status, "too-small");
+        assert_eq!(fits[1].status, "free-vram");
+        assert_eq!(fits[3].status, "free-vram");
+        assert_eq!(fits[4].status, "too-small");
     }
 
     #[test]
@@ -334,7 +462,7 @@ mod tests {
             name: "RTX Test".to_owned(),
             total_mb: 16_384,
             free_mb: 12_000,
-            source: "test",
+            source: WHISPER_VULKAN_SOURCE,
         }];
 
         let report = capacity_report_json(&gpus);

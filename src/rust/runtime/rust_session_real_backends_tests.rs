@@ -1,13 +1,7 @@
 //! Tests for [`super::rust_session_real_backends`].
 //!
-//! The constructor itself does not load the model (the wrapping
-//! [`crate::whisper::IdleUnloadingModel`] is lazy), so these tests
-//! exercise the env-driven config resolution without ever calling
-//! whisper.cpp. The model file does not have to exist on disk for
-//! [`super::make_real_session_with_activity_and_settings`] to succeed --
-//! the actual `LocalWhisper::new(...)` call is deferred until the first
-//! transcribe, which is exactly the lifecycle
-//! `WhisperLocalTranscribeBackend` provides.
+//! The session checks that local Whisper fits a GPU before starting, but
+//! defers model loading to the first utterance via `IdleUnloadingModel`.
 
 use std::sync::mpsc;
 
@@ -298,6 +292,27 @@ fn format_command_set_from_env_is_none_when_unset_or_blank() {
 }
 
 // ── production constructor integration ────────────────────────────────────────
+
+#[test]
+fn local_whisper_cpu_configuration_refuses_to_start_a_recording_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let model_path = dir.path().join("explicit-model.bin");
+    std::fs::write(&model_path, b"not loaded during startup").unwrap();
+    let runtime = crate::runtime::settings_snapshot::RuntimeSettingsSnapshot::from_pairs([
+        ("VOICEPI_STT_BACKEND".to_owned(), "whisper".to_owned()),
+        ("VOICEPI_DEVICE".to_owned(), "cpu".to_owned()),
+        (
+            MODEL_PATH_ENV.to_owned(),
+            model_path.to_str().unwrap().to_owned(),
+        ),
+    ])
+    .unwrap();
+    let (tx, _rx) = mpsc::channel();
+    let active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let result =
+        super::make_real_session_with_activity_and_settings(tx, None, active, &runtime, None);
+    assert!(matches!(result, Err(err) if err.contains("CPU inference is disabled")));
+}
 
 /// The production constructor must attach a profile
 /// matcher, otherwise users' `apply_profile` config is dead code and

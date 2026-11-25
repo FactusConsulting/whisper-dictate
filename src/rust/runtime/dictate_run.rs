@@ -180,11 +180,6 @@ fn run(args: DictateRunArgs) -> Result<()> {
     };
 
     let json_events = effective_json_events(cli_json_events, runtime.value("VOICEPI_JSON"));
-    validate_native_runtime_options(
-        Some(&settings.device),
-        Some(&settings.stt_backend),
-        cfg!(feature = "whisper-rs-vulkan"),
-    )?;
 
     // 2. Build the production session action-sink. Mirrors the supervisor's
     //    setup path (`runtime::supervisor::RuntimeSupervisor::start` when
@@ -360,32 +355,6 @@ fn parse_truthy(value: &str) -> bool {
 )]
 fn release_root_sender<T>(sender: std::sync::mpsc::Sender<T>) {
     drop(sender);
-}
-
-#[cfg_attr(
-    not(all(feature = "rust-hotkeys", feature = "rust-injection")),
-    allow(dead_code)
-)]
-pub(super) fn validate_native_runtime_options(
-    device: Option<&str>,
-    stt_backend: Option<&str>,
-    gpu_backend_compiled: bool,
-) -> Result<()> {
-    let cloud_transcription =
-        stt_backend.is_some_and(|value| value.trim().eq_ignore_ascii_case("openai"));
-    let requests_gpu = device.is_some_and(|value| {
-        matches!(
-            value.trim().to_ascii_lowercase().as_str(),
-            "vulkan" | "cuda"
-        )
-    });
-    if !cloud_transcription && !gpu_backend_compiled && requests_gpu {
-        return Err(anyhow!(
-            "the native Rust runtime cannot honor device=vulkan in this CPU-only build; \
-             use cpu/auto or install a GPU-enabled release"
-        ));
-    }
-    Ok(())
 }
 
 // -----------------------------------------------------------------------------

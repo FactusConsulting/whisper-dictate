@@ -127,6 +127,7 @@ fn start_is_blocked_when_the_selected_local_model_is_missing() {
             model: "large-v3".to_owned(),
             ..Default::default()
         });
+        app.gpu_total_mb = Some(8192);
 
         app.start_runtime();
 
@@ -148,6 +149,7 @@ fn start_checks_the_saved_model_not_an_unsaved_picker_change() {
             model: "large-v3".to_owned(),
             ..Default::default()
         });
+        app.gpu_total_mb = Some(8192);
         app.settings.model = "large-v3-turbo".to_owned();
 
         app.start_runtime();
@@ -173,6 +175,7 @@ fn start_checks_the_effective_worker_model_from_environment() {
         model: "large-v3".to_owned(),
         ..Default::default()
     });
+    app.gpu_total_mb = Some(8192);
 
     app.start_runtime();
 
@@ -188,6 +191,7 @@ fn credential_restart_is_blocked_when_the_saved_local_model_is_missing() {
             model: "large-v3".to_owned(),
             ..Default::default()
         });
+        app.gpu_total_mb = Some(8192);
         app.supervisor.set_running_for_tests();
 
         app.restart_after_credential_change("post-processing", true);
@@ -214,6 +218,7 @@ fn restart_verifies_an_uncached_model_before_replacing_a_running_session() {
             model: "large-v3".to_owned(),
             ..Default::default()
         });
+        app.gpu_total_mb = Some(8192);
         app.supervisor.set_running_for_tests();
 
         app.restart_runtime();
@@ -238,6 +243,24 @@ fn restart_keeps_the_running_session_when_the_saved_model_is_missing() {
 
         assert!(app.supervisor.is_running());
         assert!(app.runtime_log.contains("[ui] restart blocked:"));
+    });
+}
+
+#[test]
+fn local_whisper_start_on_a_cpu_only_host_requires_a_gpu_not_a_download() {
+    with_empty_model_cache(|| {
+        let mut app = test_app(AppSettings {
+            stt_backend: "whisper".to_owned(),
+            model: "large-v3".to_owned(),
+            ..Default::default()
+        });
+
+        app.start_runtime();
+
+        assert_eq!(app.runtime_state, RuntimeState::Stopped);
+        assert!(app.settings_status.contains("compatible GPU"));
+        assert!(!app.settings_status.contains("Download"));
+        assert_eq!(app.settings.stt_backend, "whisper");
     });
 }
 
