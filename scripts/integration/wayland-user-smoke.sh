@@ -386,7 +386,7 @@ section "models list (curated Whisper catalog)"
         # short-circuit the hidden-leak check.
         listed="$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*\[[^]]*\][[:space:]]*\([^[:space:]]*\).*/\1/p')"
         catalog_ok=1
-        for want in large-v3-turbo large-v3; do
+        for want in large-v3-turbo large-v3 edda-v0.2 edda-v0.2-large; do
             if ! printf '%s\n' "$listed" | grep -qx "$want"; then
                 bad "catalog missing user-facing model: $want"
                 catalog_ok=0
@@ -399,7 +399,7 @@ section "models list (curated Whisper catalog)"
             fi
         done
         if [ "$catalog_ok" -eq 1 ]; then
-            ok "catalog lists exactly the user-facing models (large-v3-turbo, large-v3)"
+            ok "catalog lists the stock and Danish presets without hidden models"
         else
             info "$out"
         fi
