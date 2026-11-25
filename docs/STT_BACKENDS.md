@@ -40,6 +40,11 @@ across GPUs. Whisper Turbo (`large-v3-turbo`) needs an estimated 2.75 GiB,
 while Whisper Quality (`large-v3`) and a ~3.1 GB Edda GGML file need about
 4.25 GiB. The estimate for a custom model depends on its file size.
 
+The Windows installer enables Vulkan when built with the Vulkan SDK. The
+published Linux bundle and current Nix package do not enable Vulkan for
+Whisper. On Linux, build with `--features shipping-vulkan` for local Whisper,
+or choose a hosted endpoint with the published bundle.
+
 Settings checks total GPU memory to indicate which models can fit. A model
 can still fail to load if too little memory is free at runtime or the GPU
 cannot initialize it. The app reports the error rather than running on the

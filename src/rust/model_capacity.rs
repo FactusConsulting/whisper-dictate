@@ -26,7 +26,7 @@ pub(crate) fn whisper_required_mib(file_bytes: u64) -> u32 {
         // including the ~1.62 GB stock file, reach the 2.75 GiB ceiling.
         ..=1_650_000_000 => (weights_mib * 2).clamp(1024, u64::from(WHISPER_TURBO_F16_MIB)),
         // Stock and Edda Large F16 reach the 4.25 GiB ceiling.
-        ..=3_150_000_000 => (weights_mib + 1536).min(u64::from(WHISPER_LARGE_F16_MIB)),
+        1_650_000_001..=3_150_000_000 => (weights_mib + 1536).min(u64::from(WHISPER_LARGE_F16_MIB)),
         // Don't cap the headroom for larger custom files.
         _ => weights_mib + weights_mib.div_ceil(2).max(1536),
     };

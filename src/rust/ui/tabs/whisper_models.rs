@@ -30,7 +30,8 @@ impl WhisperDictateApp {
     pub(in crate::ui) fn whisper_custom_model_bytes(&self) -> Option<u64> {
         let path = std::env::var(crate::ui::app::WHISPER_MODEL_PATH_ENV).ok()?;
         let metadata = std::fs::metadata(path.trim()).ok()?;
-        (metadata.is_file() && metadata.len() > 0).then(|| metadata.len())
+        let bytes = metadata.len();
+        (metadata.is_file() && bytes > 0).then_some(bytes)
     }
 
     /// Explain hardware or environment blockers before offering model setup or
