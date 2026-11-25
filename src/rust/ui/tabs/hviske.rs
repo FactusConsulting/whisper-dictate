@@ -78,3 +78,7 @@ impl WhisperDictateApp {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "hviske_tests.rs"]
+mod tests;
