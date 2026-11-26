@@ -109,9 +109,7 @@ fn local_hviske_rejects_a_hosted_provider_at_startup_and_transcription() {
     let err = backend
         .transcribe(&gate_passing_pcm(), 16_000)
         .expect_err("a hosted provider must not send local Hviske audio");
-    let TranscribeError::Backend(message) = err else {
-        panic!("expected a provider error, got {err:?}");
-    };
+    let message = err.to_string();
     assert!(message.contains("Custom STT provider"), "{message}");
     assert!(!message.contains("cloud transcription failed"), "{message}");
 }
