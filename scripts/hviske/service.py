@@ -131,7 +131,7 @@ class HviskeServer(HTTPServer):
             raise ValueError("Hviske can bind only to the literal IPv4 loopback address")
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        super().server_bind()  # NOSONAR: the address is restricted to literal IPv4 loopback.
+        super().server_bind()  # NOSONAR(S5332) The address is restricted to literal IPv4 loopback.
 
 
 def main():
