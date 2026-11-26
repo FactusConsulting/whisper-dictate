@@ -1,9 +1,11 @@
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
-use super::*;
+use anyhow::Result;
+
+use super::{transcribe_at, CloudTranscriptionResult, LocalModel, AGENT, BASE_URL};
 
 const CORRECT_HEALTH: &str = r#"{"model":"syvai/hviske-v6","device":"cuda"}"#;
 const CORRECT_TRANSCRIPT: &str =

@@ -532,10 +532,10 @@ else
 fi
 
 section "Local Hviske (optional real CUDA speech)"
-if [ -z "${WD_HVISKE_MODEL:-}" ] && [ -z "${WD_HVISKE_WAV:-}" ]; then
+if [[ -z ${WD_HVISKE_MODEL:-} && -z ${WD_HVISKE_WAV:-} ]]; then
     warn "start a local model and set WD_HVISKE_MODEL and WD_HVISKE_WAV to exercise CUDA"
-elif { [ "${WD_HVISKE_MODEL:-}" != syvai/hviske-v5.3 ] && [ "${WD_HVISKE_MODEL:-}" != syvai/hviske-v6 ]; } ||
-     [ ! -f "${WD_HVISKE_WAV:-}" ] || ! command -v jq >/dev/null; then
+elif [[ ( ${WD_HVISKE_MODEL:-} != syvai/hviske-v5.3 && ${WD_HVISKE_MODEL:-} != syvai/hviske-v6 ) ||
+        ! -f ${WD_HVISKE_WAV:-} ]] || ! command -v jq >/dev/null; then
     bad "local Hviske smoke needs v5.3 or v6 model ID, a Danish WAV file, and jq"
 else
     hviske_tmp="$(mktemp -d)"

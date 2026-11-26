@@ -146,6 +146,14 @@ class CudaGuardTests(unittest.TestCase):
 
 
 class StartupTests(unittest.TestCase):
+    def test_service_refuses_to_bind_nonloopback_addresses(self):
+        server = object.__new__(service.HviskeServer)
+        service.HTTPServer.__init__(
+            server, ("0.0.0.0", 0), service.HviskeHandler, bind_and_activate=False,
+        )
+        with server, self.assertRaisesRegex(ValueError, "IPv4 loopback"):
+            server.server_bind()
+
     def test_service_script_help_needs_no_optional_dependencies(self):
         result = subprocess.run(
             [sys.executable, "-S", str(Path(service.__file__).resolve()), "--help"],
