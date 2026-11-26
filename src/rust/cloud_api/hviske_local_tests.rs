@@ -234,6 +234,11 @@ fn local_hviske_check_ignores_remote_url_and_credentials() {
         assert!(check.operation().contains("CUDA readiness"));
         assert!(!check.uses_grpc() && !check.uses_in_process());
     }
+    let mut check = CloudApiCheck::from_settings(&settings, "unused-cloud-key").unwrap();
+    check.provider = "groq".to_owned();
+    let error = crate::cloud_api::check_cloud_api(&check).unwrap_err();
+    assert!(error.to_string().contains("Custom STT provider"));
+
     settings.stt_provider = "groq".to_owned();
     let error = CloudApiCheck::from_settings(&settings, "unused-cloud-key").unwrap_err();
     assert!(error.to_string().contains("Custom STT provider"));
@@ -265,4 +270,33 @@ fn invalid_wav_is_refused_before_contact() {
         error.contains("mono 16 kHz signed 16-bit PCM WAV"),
         "{error}"
     );
+}
+
+#[test]
+fn local_alias_routes_before_hosted_credential_and_endpoint_checks() {
+    use crate::cloud_api::{
+        cloud_transcribe, cloud_transcribe_for_provider, CloudTranscriptionRequest,
+    };
+
+    let base_url = "https://api.groq.com/openai/v1";
+    let model = LocalModel::V53.alias();
+    let invalid_audio = b"not a WAV";
+    let legacy = cloud_transcribe(base_url, "", model, invalid_audio, None, None, 1_000);
+    let configured = cloud_transcribe_for_provider(
+        "custom",
+        CloudTranscriptionRequest::new(base_url, "", model, invalid_audio, None, None, 1_000),
+    );
+    for result in [legacy, configured] {
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("local Hviske requires valid WAV audio"));
+    }
+
+    let err = cloud_transcribe_for_provider(
+        "groq",
+        CloudTranscriptionRequest::new(base_url, "", model, invalid_audio, None, None, 1_000),
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("Custom STT provider"));
 }

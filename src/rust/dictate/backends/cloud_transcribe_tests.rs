@@ -94,6 +94,29 @@ fn local_hviske_env_ignores_url_credentials_and_stt_hints() {
 }
 
 #[test]
+fn local_hviske_rejects_a_hosted_provider_at_startup_and_transcription() {
+    let config = CloudTranscribeConfig {
+        model: LocalModel::V6.alias().to_owned(),
+        api_key: String::new(),
+        ..cloud_config("https://api.groq.com/openai/v1")
+    };
+    match cloud_backend_local_only_checked_with_provider(true, config.clone(), "groq") {
+        Ok(_) => panic!("a hosted provider must not construct a local Hviske backend"),
+        Err(err) => assert!(err.contains("Custom STT provider"), "{err}"),
+    }
+
+    let backend = CloudTranscribeBackend::new_with_provider(config, "groq");
+    let err = backend
+        .transcribe(&gate_passing_pcm(), 16_000)
+        .expect_err("a hosted provider must not send local Hviske audio");
+    let TranscribeError::Backend(message) = err else {
+        panic!("expected a provider error, got {err:?}");
+    };
+    assert!(message.contains("Custom STT provider"), "{message}");
+    assert!(!message.contains("cloud transcription failed"), "{message}");
+}
+
+#[test]
 fn nemotron_auto_language_stays_provider_neutral_until_grpc_adapter() {
     let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
         base_url: "grpc://localhost:50051".to_owned(),

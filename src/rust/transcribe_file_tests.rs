@@ -261,6 +261,22 @@ fn cloud_backend_rejects_missing_key_before_network() {
 }
 
 #[test]
+fn only_local_hviske_bypasses_the_file_transcription_key_check() {
+    use crate::cloud_api::hviske_local::LocalModel;
+
+    let model = LocalModel::V6;
+    for (model_id, expected) in [
+        (model.alias(), "Custom STT provider"),
+        (model.model_id(), "requires a saved API key"),
+    ] {
+        let err = build_cloud_backend(cloud_config(model_id, ""), &dictionary(), true, "openai")
+            .err()
+            .expect("requires a Custom provider for local or a key for hosted Hviske");
+        assert!(err.to_string().contains(expected), "{err:#}");
+    }
+}
+
+#[test]
 fn cloud_backend_honors_local_only_privacy_gate() {
     let error = build_cloud_backend(
         cloud_config("whisper-1", "test-key"),
