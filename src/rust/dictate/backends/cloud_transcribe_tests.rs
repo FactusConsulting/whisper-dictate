@@ -70,6 +70,30 @@ fn config_from_env_uses_defaults_when_unset() {
 }
 
 #[test]
+fn local_hviske_env_ignores_url_credentials_and_stt_hints() {
+    for model in [LocalModel::V53, LocalModel::V6] {
+        let config = CloudTranscribeConfig::from_env_with_provider(
+            |name| match name {
+                STT_MODEL_ENV => Some(model.alias().to_owned()),
+                STT_TIMEOUT_MS_ENV => Some("4500".to_owned()),
+                _ => panic!("local Hviske must not resolve {name}"),
+            },
+            "custom",
+        );
+        assert_eq!(config.base_url, hviske_local::BASE_URL);
+        assert!(config.api_key.is_empty());
+        assert_eq!(config.language.as_deref(), Some("da"));
+        assert_eq!(config.prompt, None);
+        assert_eq!(config.timeout_ms, 4500);
+        assert_ne!(
+            CloudTranscribeBackend::new(config).stt_impl(),
+            crate::dictate::provenance::STT_IMPL_HVISKE_LOCAL,
+            "construction alone does not prove CUDA readiness"
+        );
+    }
+}
+
+#[test]
 fn nemotron_auto_language_stays_provider_neutral_until_grpc_adapter() {
     let backend = CloudTranscribeBackend::new_nemotron(CloudTranscribeConfig {
         base_url: "grpc://localhost:50051".to_owned(),

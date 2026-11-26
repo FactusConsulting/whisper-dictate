@@ -114,6 +114,18 @@ fn settings_from_env_api_key_precedence() {
 }
 
 #[test]
+fn keyless_hviske_does_not_share_a_stray_stt_credential() {
+    let settings = settings_from_env_with(lookup_from(&[
+        (POST_PROCESSOR_ENV, "openai"),
+        ("VOICEPI_STT_BACKEND", "openai"),
+        ("VOICEPI_STT_MODEL", "local:syvai/hviske-v6"),
+        ("VOICEPI_STT_API_KEY", "must-not-be-shared"),
+        ("OPENAI_API_KEY", "post-provider-key"),
+    ]));
+    assert_eq!(settings.api_key, "post-provider-key");
+}
+
+#[test]
 fn settings_from_env_generic_api_key_is_provider_aware() {
     // With BOTH generic keys present, a groq processor must read
     // GROQ_API_KEY (not the OpenAI key), and vice versa -- the failure

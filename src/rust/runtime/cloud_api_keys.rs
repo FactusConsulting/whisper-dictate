@@ -298,6 +298,12 @@ fn resolved_cloud_api_key_env_additions_with_config_endpoint(
         crate::dictate::backends::cloud_transcribe::STT_BACKEND_ENV,
         &settings.stt_backend,
     );
+    let stt_model = effective_setting(
+        existing,
+        crate::dictate::backends::cloud_transcribe::STT_MODEL_ENV,
+        &settings.stt_model,
+    );
+    let local_hviske = crate::cloud_api::hviske_local::LocalModel::from_alias(&stt_model).is_some();
     let post_processor = effective_setting(
         existing,
         crate::postprocess::POST_PROCESSOR_ENV,
@@ -311,18 +317,21 @@ fn resolved_cloud_api_key_env_additions_with_config_endpoint(
     // uses), so `POST_API_KEY_ENDPOINT` records the exact URL the resolver saw.
     let (post_key, post_key_endpoint) =
         post_credential_and_endpoint(&post_processor, &post_endpoint);
-    let provider_for_key = stt_provider_for_key(
-        existing,
-        &stt_endpoint,
-        configured_stt_base_url,
-        stt_provider,
-        stt_provider_inferred,
-    );
-    // `None` is a hard stop for an inferred Nemotron provider on an untrusted
-    // endpoint. Do not pass an empty provider through to the generic resolver:
-    // that would classify the endpoint as Custom and load its saved key.
-    let stt_key = provider_for_key
-        .and_then(|provider| stt_credential_for(&stt_backend, &stt_endpoint, provider));
+    let stt_key = if local_hviske {
+        None
+    } else {
+        // `None` is a hard stop for an inferred Nemotron provider on an untrusted
+        // endpoint. Do not pass an empty provider through to the generic resolver:
+        // that would classify the endpoint as Custom and load its saved key.
+        stt_provider_for_key(
+            existing,
+            &stt_endpoint,
+            configured_stt_base_url,
+            stt_provider,
+            stt_provider_inferred,
+        )
+        .and_then(|provider| stt_credential_for(&stt_backend, &stt_endpoint, provider))
+    };
     // STT-as-post-fallback marker:
     // both settings loaders accept `VOICEPI_STT_API_KEY` as a post-key
     // fallback (see `postprocess/settings.rs`). An STT-only injection
@@ -586,6 +595,9 @@ where
     let mut wrote_post_key = false;
     let mut wrote_stt_key = false;
     for (name, resolved) in [("VOICEPI_STT_API_KEY", stt), ("VOICEPI_POST_API_KEY", post)] {
+        let Some(value) = resolved else {
+            continue;
+        };
         if existing
             .iter()
             .any(|(k, v)| k == name && !v.trim().is_empty())
@@ -595,14 +607,12 @@ where
         if env_lookup(name).is_some_and(|v| !v.trim().is_empty()) {
             continue;
         }
-        if let Some(value) = resolved {
-            match name {
-                "VOICEPI_POST_API_KEY" => wrote_post_key = true,
-                "VOICEPI_STT_API_KEY" => wrote_stt_key = true,
-                _ => {}
-            }
-            out.push((name.to_owned(), value));
+        match name {
+            "VOICEPI_POST_API_KEY" => wrote_post_key = true,
+            "VOICEPI_STT_API_KEY" => wrote_stt_key = true,
+            _ => {}
         }
+        out.push((name.to_owned(), value));
     }
     // Stamp the endpoint the injected key was resolved against so the
     // worker's postprocess pipeline can refuse to send it to a different

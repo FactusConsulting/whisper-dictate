@@ -265,7 +265,10 @@ impl WhisperDictateApp {
     }
 
     pub(in crate::ui) fn ensure_stt_api_key_loaded_for_runtime(&mut self) {
-        if self.settings.stt_backend != "openai" || !self.stt_api_key_input.trim().is_empty() {
+        if self.settings.stt_backend != "openai"
+            || self.local_hviske_model().is_some()
+            || !self.stt_api_key_input.trim().is_empty()
+        {
             return;
         }
         self.reload_stt_api_key();
@@ -355,6 +358,7 @@ impl WhisperDictateApp {
         let in_process = self.current_cloud_provider() == CloudProvider::Nemotron
             && crate::cloud_api::is_nemotron_in_process_endpoint(self.settings.stt_base_url.trim());
         self.settings.stt_backend == "openai"
+            && self.local_hviske_model().is_none()
             && !loopback
             && !in_process
             && self.stt_api_key_input.trim().is_empty()

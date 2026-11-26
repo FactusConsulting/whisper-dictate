@@ -83,7 +83,7 @@ fn run() -> anyhow::Result<()> {
             timeout_ms,
         } => cloud_api::handle_cloud_transcribe(
             &base_url,
-            &cloud_api::resolve_api_key(&api_key, &base_url),
+            &api_key,
             &model,
             audio_wav_path.as_ref(),
             (!language.trim().is_empty()).then_some(language.as_str()),

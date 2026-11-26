@@ -73,7 +73,7 @@
       "default": "whisper",
       "live": false,
       "choices": ["whisper", "openai"],
-      "description": "Speech-to-text engine: whisper (local native whisper.cpp) or openai (external OpenAI-compatible cloud API).",
+      "description": "Speech-to-text engine: whisper (native whisper.cpp) or openai (an API provider, in-process Nemotron, or the local Hviske CUDA service).",
       "advanced": false,
       "ui_simple": true,
       "category": "core"
@@ -84,7 +84,7 @@
       "default": null,
       "live": false,
       "nullable": true,
-      "description": "Transcription model used when stt_backend=openai. Cloud providers use a model id (for example gpt-4o-mini-transcribe); Nemotron in-process accepts the official model id (downloaded and verified automatically) or an existing local .gguf path.",
+      "description": "Transcription model used when stt_backend=openai. Cloud providers use a model id (for example gpt-4o-mini-transcribe). In-process Nemotron accepts the verified official model id or an existing local .gguf path. For the local Hviske CUDA service with stt_provider=custom, select local:syvai/hviske-v5.3 or local:syvai/hviske-v6.",
       "advanced": true,
       "ui_simple": true,
       "category": "stt-cloud"
@@ -94,7 +94,7 @@
       "key": "stt_base_url",
       "default": "https://api.openai.com/v1",
       "live": false,
-      "description": "Transcription endpoint used when stt_backend=openai. OpenAI-compatible providers use an https URL; Nemotron uses Riva gRPC (grpc://localhost:50051 or https://grpc.nvcf.nvidia.com:443). With a suitable GPU, Nemotron can use inproc://nemotron and download the verified runtime and model. For hosted multilingual Nemotron, append ?function-id=YOUR_FUNCTION_ID.",
+      "description": "Transcription endpoint used when stt_backend=openai. Local Hviske ignores this setting and uses the on-device CUDA service. OpenAI-compatible providers use an https URL; Nemotron uses Riva gRPC (grpc://localhost:50051 or https://grpc.nvcf.nvidia.com:443). With a suitable GPU, Nemotron can use inproc://nemotron and download the verified runtime and model. For hosted multilingual Nemotron, append ?function-id=YOUR_FUNCTION_ID.",
       "advanced": true,
       "category": "stt-cloud"
     },

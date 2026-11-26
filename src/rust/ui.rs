@@ -178,6 +178,7 @@ fn whisper_model_hint(model: &str) -> (&'static str, u32) {
 struct SpeechGpuTotals {
     whisper_mib: Option<u32>,
     nemotron_mib: Option<u32>,
+    hviske_mib: Option<u32>,
 }
 
 /// Find the highest total VRAM usable by each local speech backend without
@@ -185,6 +186,7 @@ struct SpeechGpuTotals {
 fn spawn_gpu_probe() -> Receiver<SpeechGpuTotals> {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
+        let hviske_mib = crate::model_capacity::hviske_cuda_total_mib();
         #[cfg(any(feature = "whisper-rs-vulkan", feature = "nemotron-local"))]
         let result = {
             let adapters = crate::model_capacity::vulkan::Adapters::probe();
@@ -201,10 +203,14 @@ fn spawn_gpu_probe() -> Receiver<SpeechGpuTotals> {
             SpeechGpuTotals {
                 whisper_mib,
                 nemotron_mib,
+                hviske_mib,
             }
         };
         #[cfg(not(any(feature = "whisper-rs-vulkan", feature = "nemotron-local")))]
-        let result = SpeechGpuTotals::default();
+        let result = SpeechGpuTotals {
+            hviske_mib,
+            ..SpeechGpuTotals::default()
+        };
         let _ = tx.send(result);
     });
     rx
@@ -448,6 +454,7 @@ struct WhisperDictateApp {
     /// fit estimate only; the runtime checks free VRAM before loading.
     gpu_total_mb: Option<u32>,
     nemotron_gpu_total_mib: Option<u32>,
+    hviske_gpu_total_mib: Option<u32>,
     /// This one-shot background probe is polled non-blockingly each frame.
     gpu_probe: Option<Receiver<SpeechGpuTotals>>,
     /// The raw worker `status` state string from the most recent status event
@@ -669,6 +676,7 @@ impl Default for WhisperDictateApp {
             background_task_label: None,
             gpu_total_mb: None,
             nemotron_gpu_total_mib: None,
+            hviske_gpu_total_mib: None,
             gpu_probe: Some(spawn_gpu_probe()),
             last_worker_status_state: String::new(),
             pipeline_stage: None,

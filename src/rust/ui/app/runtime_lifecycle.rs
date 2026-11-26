@@ -215,7 +215,9 @@ impl WhisperDictateApp {
                 .set(XKB_LAYOUT_ENV, xkb_layout)
                 .expect("xkb layout is a schema-backed runtime setting");
         }
-        if self.settings.stt_backend == "openai" {
+        let local_hviske =
+            self.settings.stt_backend == "openai" && self.local_hviske_model().is_some();
+        if self.settings.stt_backend == "openai" && !local_hviske {
             let key = self.stt_api_key_input.trim();
             if !key.is_empty() {
                 command
@@ -249,7 +251,14 @@ impl WhisperDictateApp {
             // endpoint is the correct + strictest classification. If the
             // values genuinely differ, the post field holds a post-specific
             // key and PostSpecific applies.
-            let (key, provenance) = if post_key.is_empty() {
+            let local_stt_key_mirror = local_hviske
+                && !command.runtime_credential_is_ambient(POST_API_KEY_ENV, post_key)
+                && (post_key == stt_key
+                    || command.runtime_credential_is_ambient(STT_API_KEY_ENV, post_key));
+            let (key, provenance) = if local_hviske && (post_key.is_empty() || local_stt_key_mirror)
+            {
+                ("", crate::runtime::cloud_api_keys::PostKeyProvenance::None)
+            } else if post_key.is_empty() {
                 (
                     stt_key,
                     crate::runtime::cloud_api_keys::PostKeyProvenance::SttMirror,

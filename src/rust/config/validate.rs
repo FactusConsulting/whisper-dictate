@@ -88,25 +88,34 @@ impl AppSettings {
     /// post-processor is selected.
     fn validate_backend_requirements(&self) -> Result<()> {
         if self.stt_backend == "openai" {
-            // NVIDIA's hosted Nemotron endpoint is Riva gRPC and the vendor's
-            // quick-start documents it as a bare `grpc.nvcf.nvidia.com:443`
-            // authority. Keep the normal HTTP URL guard for every other
-            // provider, but allow that provider-scoped gRPC spelling so the
-            // Speech-tab Test API can normalize it to TLS.
-            let bare_nemotron_grpc = crate::cloud_api::is_nemotron_provider(&self.stt_provider)
-                && crate::cloud_api::is_nemotron_grpc_endpoint(
-                    "nemotron 3.5 asr",
-                    self.stt_base_url.trim(),
-                );
-            let nemotron_in_process = crate::cloud_api::is_nemotron_provider(&self.stt_provider)
-                && crate::cloud_api::is_nemotron_in_process_endpoint(&self.stt_base_url);
-            if !bare_nemotron_grpc && !nemotron_in_process {
-                validate_http_url("stt_base_url", &self.stt_base_url)?;
+            if crate::cloud_api::hviske_local::LocalModel::from_alias(&self.stt_model).is_some() {
+                validate_choice(
+                    "stt_provider for local Hviske",
+                    &self.stt_provider,
+                    &["custom"],
+                )?;
+            } else {
+                // NVIDIA's hosted Nemotron endpoint is Riva gRPC and the vendor's
+                // quick-start documents it as a bare `grpc.nvcf.nvidia.com:443`
+                // authority. Keep the normal HTTP URL guard for every other
+                // provider, but allow that provider-scoped gRPC spelling so the
+                // Speech-tab Test API can normalize it to TLS.
+                let bare_nemotron_grpc = crate::cloud_api::is_nemotron_provider(&self.stt_provider)
+                    && crate::cloud_api::is_nemotron_grpc_endpoint(
+                        "nemotron 3.5 asr",
+                        self.stt_base_url.trim(),
+                    );
+                let nemotron_in_process =
+                    crate::cloud_api::is_nemotron_provider(&self.stt_provider)
+                        && crate::cloud_api::is_nemotron_in_process_endpoint(&self.stt_base_url);
+                if !bare_nemotron_grpc && !nemotron_in_process {
+                    validate_http_url("stt_base_url", &self.stt_base_url)?;
+                }
+                if self.stt_model.trim().is_empty() {
+                    return Err(anyhow!("stt_model is required when stt_backend is openai"));
+                }
+                self.validate_nemotron_profile_language()?;
             }
-            if self.stt_model.trim().is_empty() {
-                return Err(anyhow!("stt_model is required when stt_backend is openai"));
-            }
-            self.validate_nemotron_profile_language()?;
         }
         if matches!(self.post_processor.as_str(), "ollama" | "openai" | "groq") {
             validate_http_url("post_base_url", &self.post_base_url)?;
@@ -250,6 +259,27 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("stt_base_url"));
+    }
+
+    #[test]
+    fn local_hviske_requires_custom_but_does_not_require_a_cloud_url() {
+        let mut settings = AppSettings {
+            stt_backend: "openai".to_owned(),
+            stt_provider: "custom".to_owned(),
+            stt_model: crate::cloud_api::hviske_local::LocalModel::V6
+                .alias()
+                .to_owned(),
+            stt_base_url: String::new(),
+            ..AppSettings::default()
+        };
+        settings.validate().unwrap();
+
+        settings.stt_provider = "groq".to_owned();
+        assert!(settings
+            .validate()
+            .unwrap_err()
+            .to_string()
+            .contains("stt_provider for local Hviske"));
     }
 
     #[cfg(feature = "whisper-rs-vulkan")]

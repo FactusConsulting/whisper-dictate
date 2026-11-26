@@ -59,6 +59,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         background_task_label: None,
         gpu_total_mb: None,
         nemotron_gpu_total_mib: None,
+        hviske_gpu_total_mib: None,
         gpu_probe: None,
         last_worker_status_state: String::new(),
         pipeline_stage: None,

@@ -124,10 +124,10 @@ pub const LANG_ENV: &str = "VOICEPI_LANG";
 /// classifies to a different provider --
 pub const POST_API_KEY_ENDPOINT_ENV: &str = "VOICEPI_POST_API_KEY_ENDPOINT";
 
-/// Shared API-key env vars checked before any provider-specific key,
-/// highest precedence first: the post-specific override, then the
-/// STT-shared key the UI mirrors into the worker env (`ui/app.rs`).
-const API_KEY_SHARED_ENV: &[&str] = &["VOICEPI_POST_API_KEY", "VOICEPI_STT_API_KEY"];
+/// Post-specific credential, which takes precedence over any fallback.
+const API_KEY_POST_ENV: &str = "VOICEPI_POST_API_KEY";
+/// STT credential reused only when the active STT route is not keyless Hviske.
+const API_KEY_STT_ENV: &str = "VOICEPI_STT_API_KEY";
 
 /// Build [`PostprocessSettings`] from the process environment. Convenience
 /// wrapper around [`settings_from_env_with`] for production callers.
@@ -199,10 +199,21 @@ pub fn settings_from_env_with(lookup: impl Fn(&str) -> Option<String>) -> Postpr
         "openai" => &["OPENAI_API_KEY"],
         _ => &[],
     };
-    let api_key = API_KEY_SHARED_ENV
-        .iter()
-        .chain(provider_generic.iter())
-        .find_map(|name| get(name))
+    let key_from_stt = || {
+        use crate::cloud_api::hviske_local::LocalModel;
+        use crate::dictate::backends::cloud_transcribe::STT_MODEL_ENV;
+        let local_hviske =
+            lookup(STT_MODEL_ENV).is_some_and(|model| LocalModel::from_alias(&model).is_some());
+        // A key left over from cloud STT does not belong to keyless local Hviske.
+        if local_hviske {
+            None
+        } else {
+            get(API_KEY_STT_ENV)
+        }
+    };
+    let api_key = get(API_KEY_POST_ENV)
+        .or_else(key_from_stt)
+        .or_else(|| provider_generic.iter().find_map(|name| get(name)))
         .unwrap_or_default();
 
     PostprocessSettings {

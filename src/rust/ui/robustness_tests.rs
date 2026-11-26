@@ -169,6 +169,7 @@ fn pending_gpu_probe_does_not_offer_local_whisper_until_a_model_fits() {
     tx.send(SpeechGpuTotals {
         whisper_mib: Some(turbo_mib),
         nemotron_mib: None,
+        hviske_mib: None,
     })
     .unwrap();
     app.poll_runtime();

@@ -52,6 +52,9 @@ pub const STT_IMPL_CLOUD_NEMOTRON: &str = "cloud-nemotron";
 /// official NeMo-Speech.cpp C ABI.
 pub const STT_IMPL_NEMOTRON_LOCAL: &str = "nemotron.cpp";
 
+/// `stt_impl` value for the verified loopback CUDA Hviske service.
+pub const STT_IMPL_HVISKE_LOCAL: &str = "local-hviske";
+
 /// `stt_impl` value for any OTHER OpenAI-compatible endpoint: a
 /// self-hosted server on localhost, Azure OpenAI, a proxy, or whatever
 /// else the operator put in `stt_base_url` (`custom` is a first-class

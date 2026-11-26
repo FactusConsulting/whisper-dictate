@@ -53,6 +53,7 @@ impl WhisperDictateApp {
             if let Some(totals) = totals {
                 self.gpu_total_mb = totals.whisper_mib;
                 self.nemotron_gpu_total_mib = totals.nemotron_mib;
+                self.hviske_gpu_total_mib = totals.hviske_mib;
                 self.gpu_probe = None;
             }
         }

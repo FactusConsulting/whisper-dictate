@@ -12,7 +12,7 @@ use std::time::Duration;
 use anyhow::{anyhow, Result};
 use serde_json::Value;
 
-use super::{check_nemotron, grpc};
+use super::{check_nemotron, grpc, hviske_local};
 use crate::cloud_api::http::{
     check_status, http_error, parse_timeout_ms, platform_tls_agent, USER_AGENT,
 };
@@ -76,6 +76,9 @@ impl PostApiCheckResult {
 
 impl CloudApiCheckResult {
     pub fn summary(&self) -> String {
+        if self.provider == hviske_local::PROVIDER_LABEL {
+            return format!("{} is ready on CUDA: {}.", self.provider, self.model);
+        }
         if self.provider == "Nemotron 3.5 ASR" && self.probe_text.is_none() && self.model_count == 1
         {
             return format!(
@@ -113,6 +116,19 @@ impl CloudApiCheck {
     pub fn from_settings(settings: &AppSettings, api_key: &str) -> Result<Self> {
         if settings.stt_backend != "openai" {
             return Err(anyhow!("cloud API check requires STT backend = openai"));
+        }
+        if let Some(model) = hviske_local::LocalModel::from_alias(&settings.stt_model) {
+            hviske_local::require_custom_provider(&settings.stt_provider)?;
+            return Ok(Self {
+                provider: hviske_local::PROVIDER_LABEL.to_owned(),
+                base_url: hviske_local::BASE_URL.to_owned(),
+                model: model.alias().to_owned(),
+                api_key: String::new(),
+                language: Some(hviske_local::LANGUAGE.to_owned()),
+                device: hviske_local::DEVICE.to_owned(),
+                local_only: settings.local_only,
+                timeout_ms: parse_timeout_ms(&settings.stt_timeout_ms, 30_000),
+            });
         }
         let api_key = api_key.trim();
         let loopback = crate::privacy::is_loopback_url(settings.stt_base_url.trim());
@@ -173,7 +189,9 @@ impl CloudApiCheck {
 
     /// Human-readable operation shown in the UI task log and completion row.
     pub fn operation(&self) -> String {
-        if self.uses_in_process() {
+        if hviske_local::LocalModel::from_alias(&self.model).is_some() {
+            format!("{} CUDA readiness", hviske_local::PROVIDER_LABEL)
+        } else if self.uses_in_process() {
             format!("{} in-process model check", self.provider)
         } else if self.uses_grpc() {
             format!("{} gRPC transcription smoke", self.provider)
@@ -230,6 +248,20 @@ pub fn check_cloud_api_while(
 ) -> Result<CloudApiCheckResult> {
     #[cfg(not(feature = "nemotron-local"))]
     let _ = &runtime_active;
+    if let Some(model) = hviske_local::LocalModel::from_alias(&check.model) {
+        if check.provider != hviske_local::PROVIDER_LABEL {
+            hviske_local::require_custom_provider(&check.provider)?;
+        }
+        hviske_local::ensure_ready(model)?;
+        return Ok(CloudApiCheckResult {
+            provider: hviske_local::PROVIDER_LABEL.to_owned(),
+            model: model.model_id().to_owned(),
+            model_count: 1,
+            model_available: true,
+            probe_text: None,
+            probe_language: None,
+        });
+    }
     if check.uses_in_process() {
         #[cfg(feature = "nemotron-local")]
         {
