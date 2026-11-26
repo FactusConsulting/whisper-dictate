@@ -226,53 +226,28 @@ impl WhisperDictateApp {
                     .expect("STT credential is a scoped runtime value");
             }
         }
-        // Track provenance of the pushed post key so
-        // `stamp_post_api_key_endpoint_marker` can bind the marker to the
-        // ENDPOINT the underlying credential was resolved for -- not the
-        // configured post endpoint blindly: a Groq-STT + OpenAI-post setup
-        // must not stamp the OpenAI marker for a mirrored Groq STT key,
-        // which the revalidation check would then APPROVE for OpenAI --
-        // a cross-provider leak of the STT key.
-        let mut post_key_provenance = crate::runtime::cloud_api_keys::PostKeyProvenance::None;
+        // Bind each credential to the endpoint it was resolved for.
+        use crate::runtime::cloud_api_keys::PostKeyProvenance;
+        let mut post_key_provenance = PostKeyProvenance::None;
         if matches!(self.settings.post_processor.as_str(), "openai" | "groq") {
             let post_key = self.post_api_key_input.trim();
             let stt_key = self.stt_api_key_input.trim();
-            // `load_post_api_key_state` (`ui/api_keys.rs`)
-            // populates `post_api_key_input` from the `VOICEPI_STT_API_KEY`
-            // env fallback when no post-specific credential is saved. The
-            // field is then NON-EMPTY, so the naive "empty post -> SttMirror,
-            // else PostSpecific" rule stamps the OpenAI post endpoint for a
-            // key that is actually the Groq STT key -- another
-            // cross-provider approval. Treat provenance as SttMirror
-            // whenever the post field's VALUE equals the STT field's value.
-            // Reason it's safe both ways: if the user pasted the same key
-            // into both fields intentionally, that key IS the STT key (they
-            // configured it as such), so binding the marker to the STT
-            // endpoint is the correct + strictest classification. If the
-            // values genuinely differ, the post field holds a post-specific
-            // key and PostSpecific applies.
-            let local_stt_key_mirror = local_hviske
-                && !command.runtime_credential_is_ambient(POST_API_KEY_ENV, post_key)
-                && (post_key == stt_key
-                    || command.runtime_credential_is_ambient(STT_API_KEY_ENV, post_key));
-            let (key, provenance) = if local_hviske && (post_key.is_empty() || local_stt_key_mirror)
-            {
-                ("", crate::runtime::cloud_api_keys::PostKeyProvenance::None)
+            // A keyless STT route must drop only an actual STT fallback, not
+            // an independently configured post key with the same value.
+            let loaded_stt_fallback = self.post_api_key_from_stt_fallback
+                && post_key == self.saved_post_api_key_input.trim();
+            let (key, provenance) = if local_hviske {
+                if loaded_stt_fallback {
+                    ("", PostKeyProvenance::None)
+                } else {
+                    (post_key, PostKeyProvenance::PostSpecific)
+                }
             } else if post_key.is_empty() {
-                (
-                    stt_key,
-                    crate::runtime::cloud_api_keys::PostKeyProvenance::SttMirror,
-                )
-            } else if !stt_key.is_empty() && post_key == stt_key {
-                (
-                    post_key,
-                    crate::runtime::cloud_api_keys::PostKeyProvenance::SttMirror,
-                )
+                (stt_key, PostKeyProvenance::SttMirror)
+            } else if loaded_stt_fallback || (!stt_key.is_empty() && post_key == stt_key) {
+                (post_key, PostKeyProvenance::SttMirror)
             } else {
-                (
-                    post_key,
-                    crate::runtime::cloud_api_keys::PostKeyProvenance::PostSpecific,
-                )
+                (post_key, PostKeyProvenance::PostSpecific)
             };
             if !key.is_empty() {
                 // If the value we are about to push equals the ambient

@@ -435,6 +435,7 @@ struct WhisperDictateApp {
     stt_api_key_status: String,
     post_api_key_input: String,
     saved_post_api_key_input: String,
+    post_api_key_from_stt_fallback: bool,
     post_api_key_reveal_until: Option<Instant>,
     post_api_key_status: String,
     dictionary_preview: String,
@@ -607,12 +608,12 @@ impl Default for WhisperDictateApp {
                     format!("Could not load API key: {err}"),
                 )
             });
-        let (post_api_key_input, saved_post_api_key_input, post_api_key_status) =
+        let (post_api_key_input, post_api_key_status, post_api_key_from_stt_fallback) =
             load_post_api_key_state(PostProvider::from_settings(&settings)).unwrap_or_else(|err| {
                 (
                     String::new(),
-                    String::new(),
                     format!("Could not load post-processing API key: {err}"),
+                    false,
                 )
             });
         let config_path = config::config_path().display().to_string();
@@ -662,8 +663,9 @@ impl Default for WhisperDictateApp {
             stt_api_key_input,
             stt_api_key_reveal_until: None,
             stt_api_key_status,
-            saved_post_api_key_input,
+            saved_post_api_key_input: post_api_key_input.clone(),
             post_api_key_input,
+            post_api_key_from_stt_fallback,
             post_api_key_reveal_until: None,
             post_api_key_status,
             dictionary_preview: String::new(),

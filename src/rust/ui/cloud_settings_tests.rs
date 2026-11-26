@@ -539,6 +539,44 @@ fn ui_worker_command_treats_post_field_equal_to_stt_field_as_stt_mirror() {
 }
 
 #[test]
+fn local_hviske_preserves_a_saved_post_key_that_matches_the_previous_stt_key() {
+    let _lock = crate::test_env_lock::lock_env();
+    let _post = EnvVarGuard::remove("VOICEPI_POST_API_KEY");
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "custom".to_owned(),
+        stt_model: crate::cloud_api::hviske_local::LocalModel::V6
+            .alias()
+            .to_owned(),
+        post_processor: "openai".to_owned(),
+        post_base_url: "https://api.openai.com/v1".to_owned(),
+        ..Default::default()
+    });
+    let separately_saved_key = "same-key-saved-for-both-providers";
+    app.stt_api_key_input = separately_saved_key.to_owned();
+    app.post_api_key_input = separately_saved_key.to_owned();
+    app.saved_post_api_key_input = separately_saved_key.to_owned();
+
+    let command = app.worker_command();
+    assert_eq!(
+        runtime_value(&command, "VOICEPI_POST_API_KEY"),
+        Some(separately_saved_key)
+    );
+    assert_eq!(
+        runtime_value(&command, "VOICEPI_POST_API_KEY_ENDPOINT"),
+        Some("https://api.openai.com/v1")
+    );
+
+    app.post_api_key_from_stt_fallback = true;
+    let command = app.worker_command();
+    assert_eq!(runtime_value(&command, "VOICEPI_POST_API_KEY"), None);
+    assert_eq!(
+        runtime_value(&command, "VOICEPI_POST_API_KEY_ENDPOINT"),
+        None
+    );
+}
+
+#[test]
 fn ui_worker_command_preserves_ambient_env_key_ownership() {
     // A key already owned by the ambient environment must remain ambient;
     // the UI should not stamp it as a child-process credential.

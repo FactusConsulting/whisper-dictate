@@ -47,6 +47,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         stt_api_key_status: String::new(),
         post_api_key_input: String::new(),
         saved_post_api_key_input: String::new(),
+        post_api_key_from_stt_fallback: false,
         post_api_key_reveal_until: None,
         post_api_key_status: String::new(),
         dictionary_preview: String::new(),

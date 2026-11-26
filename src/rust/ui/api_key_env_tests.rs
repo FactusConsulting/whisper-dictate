@@ -46,17 +46,21 @@ fn post_api_key_can_load_from_environment_fallback() {
     let _groq = EnvVarGuard::set("GROQ_API_KEY", "groq-post-key");
 
     assert_eq!(
-        load_post_api_key_from_env(PostProvider::Groq).as_deref(),
-        Some("groq-post-key")
+        load_post_api_key_from_env(PostProvider::Groq),
+        Some(("groq-post-key".to_owned(), false))
     );
     assert_eq!(load_post_api_key_from_env(PostProvider::OpenAi), None);
 
-    unsafe {
-        env::set_var("VOICEPI_POST_API_KEY", "post-override-key");
-    }
+    let _stt = EnvVarGuard::set("VOICEPI_STT_API_KEY", "shared-test-key");
+    assert_eq!(
+        load_post_api_key_from_env(PostProvider::Groq),
+        Some(("shared-test-key".to_owned(), true))
+    );
+
+    let _post = EnvVarGuard::set("VOICEPI_POST_API_KEY", "shared-test-key");
 
     assert_eq!(
-        load_post_api_key_from_env(PostProvider::Groq).as_deref(),
-        Some("post-override-key")
+        load_post_api_key_from_env(PostProvider::Groq),
+        Some(("shared-test-key".to_owned(), false))
     );
 }
