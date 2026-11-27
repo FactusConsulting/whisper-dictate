@@ -605,7 +605,6 @@ fn version_only_changes_skip_heavy_jobs_on_pull_requests_and_main_pushes() {
     ));
     for gate in [
         "RUN_LEGACY_INSTALLER: ${{ needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}",
-        "RUN_SMOKE: ${{ needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}",
         "RUN_RUST: ${{ needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}",
         "${{ needs.changes.result == 'success'\n            && needs.changes.outputs.rust == 'true'\n",
         "RUN_INTEG: ${{ needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}",
@@ -662,29 +661,39 @@ fn ci_validation_jobs_have_single_owners_and_fail_closed() {
     assert!(unit.contains("-p whisper-dictate-app --doc"));
     assert!(!unit.contains("cargo nextest"));
     assert!(!unit.contains("cargo audit"));
-    // General policy runs once on Linux; only the platform-specific fixture
-    // is additionally selected in the Windows anchor cell.
+    // General policy runs in unit; Windows shipping also selects the fixture.
     assert_eq!(workflow.matches("--test repository_policy").count(), 2);
     assert_eq!(workflow.matches("-p whisper-dictate-app --doc").count(), 1);
 
     assert!(dependency_audit.contains("uses: ./.github/workflows/cargo-audit.yml"));
     assert!(dependency_audit.contains("if: ${{ needs.changes.outputs.audit == 'true' }}"));
 
-    assert_eq!(rust_features.matches("- id: base").count(), 1);
-    assert!(rust_features.contains(
-        "cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci -E 'not(binary(=repository_policy))' ${{ matrix.profile.feature_arg }}"
-    ));
-    assert!(!rust_features.contains("Rust CLI smoke"));
-    assert!(!rust_features.contains("-- --help"));
-
-    assert!(smoke.contains("matrix:\n        os: [ubuntu-latest, windows-2025]"));
-    assert_eq!(smoke.matches("-- --help").count(), 1);
-    assert_eq!(smoke.matches("-- --version").count(), 1);
-    assert_eq!(smoke.matches("-- config path").count(), 1);
+    let required_context_matrix = "matrix:\n        os: [ubuntu-latest, windows-2025]";
+    assert!(rust_features.contains(required_context_matrix));
+    assert!(rust_aggregator.contains(required_context_matrix));
+    assert!(smoke.contains(required_context_matrix));
+    assert!(smoke.contains("needs: [changes, rust-features]"));
     assert!(smoke.contains("needs.changes.result != 'success'"));
-    assert_eq!(workflow.matches("-- --help").count(), 1);
-    assert_eq!(workflow.matches("-- --version").count(), 1);
-    assert_eq!(workflow.matches("cargo run --locked").count(), 3);
+    assert!(smoke.contains(
+        "if: needs.changes.outputs.rust == 'true' && needs.rust-features.result != 'success'"
+    ));
+    assert!(!smoke.contains("needs.rust-features.result != 'skipped'"));
+    assert!(!smoke.contains("cargo "));
+    let native_smoke = rust_features
+        .split("      - name: Native CLI smoke\n")
+        .nth(1)
+        .and_then(|step| step.split("\n      - name: ").next())
+        .expect("shipping CLI smoke step");
+    assert!(native_smoke.contains("matrix.profile.id == 'shipping'"));
+    assert!(native_smoke.contains("target/debug/wd.exe"));
+    assert!(native_smoke.contains("target/llvm-cov-target/debug/wd"));
+    for command in ["--help", "--version", "config path"] {
+        assert!(
+            native_smoke.contains(command),
+            "missing CLI smoke {command}"
+        );
+    }
+    assert!(!native_smoke.contains("cargo "));
 
     assert!(rust_aggregator.contains("needs.changes.result != 'success'"));
     assert!(rust_aggregator.contains("needs.rust-features.result != 'success'"));
@@ -692,14 +701,38 @@ fn ci_validation_jobs_have_single_owners_and_fail_closed() {
 
     assert!(integration.contains("needs.changes.outputs.rust == 'true'"));
     assert!(!integration.contains("needs.changes.outputs.repo_tests == 'true'"));
-    assert!(!integration.contains("Native repository-policy tests inside container"));
-    assert!(!integration.contains("-- --version"));
-    assert!(integration.contains("test_args+=(--test \"$test_name\")"));
-    assert!(integration.contains("[ \"$test_name\" != repository_policy ]"));
-    assert!(integration.contains("-p whisper-dictate-app --lib --bins \"${test_args[@]}\""));
-    assert!(!integration.contains(
-        "bash -c \"cargo test --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app\""
-    ));
+    assert_eq!(integration.matches("cargo build ").count(), 1);
+    assert!(!integration.contains("cargo test "));
+    assert!(!integration.contains("cargo run "));
+    let build = integration
+        .split("      - name: Build the shipping CLI inside the container\n")
+        .nth(1)
+        .and_then(|step| step.split("\n      - name: ").next())
+        .expect("Ubuntu compatibility build step");
+    for arg in [
+        "--locked",
+        "--release",
+        "--no-default-features --features shipping",
+        "--bin wd",
+    ] {
+        assert!(
+            build.contains(arg),
+            "Ubuntu compatibility build lacks {arg}"
+        );
+    }
+    for smoke in [
+        "models list",
+        "self-test ptt-wedge --iterations 5 --json",
+        "self-test injection-idempotency --iterations 10 --json",
+        "scripts/integration/audio-capture-smoke.sh",
+        "models download tiny.en",
+        "self-test whisper-load --model tiny.en --json",
+    ] {
+        assert!(
+            integration.contains(smoke),
+            "Ubuntu compatibility lacks {smoke}"
+        );
+    }
 }
 
 #[test]
@@ -758,7 +791,6 @@ fn rust_workflows_use_locked_nextest_and_report_dependency_freshness() {
     let test_workflow = read_repo(".github/workflows/test.yml");
     let outdated_workflow = read_repo(".github/workflows/cargo-outdated.yml");
     let nextest_config = read_repo("src/rust/.config/nextest.toml");
-    let dev_check = read_repo("scripts/dev/dev-check.ps1").replace("\r\n", "\n");
 
     assert!(test_workflow.contains("tool: cargo-nextest"));
     let feature_matrix = test_workflow
@@ -766,26 +798,28 @@ fn rust_workflows_use_locked_nextest_and_report_dependency_freshness() {
         .nth(1)
         .and_then(|section| section.split("\n  rust:\n").next())
         .expect("rust-features job must be present");
-    assert!(feature_matrix.contains(
-        "cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci -E 'not(binary(=repository_policy))' ${{ matrix.profile.feature_arg }}"
-    ));
+    for runner in ["cargo nextest run ", "cargo llvm-cov nextest "] {
+        let command = feature_matrix
+            .lines()
+            .find(|line| line.contains(runner) && line.contains("binary(=repository_policy)"))
+            .unwrap_or_else(|| panic!("missing shipping suite using {runner}"));
+        for arg in [
+            "--locked",
+            "--profile ci",
+            "--no-default-features --features shipping",
+        ] {
+            assert!(
+                command.contains(arg),
+                "shipping suite lacks {arg}: {command}"
+            );
+        }
+    }
     assert!(test_workflow.contains(
         "cargo test --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --doc"
     ));
     assert!(
         nextest_config.contains("[profile.ci]") && nextest_config.contains("fail-fast = false")
     );
-    assert!(dev_check.contains("Name = 'cargo install cargo-nextest --locked'"));
-    assert!(dev_check.contains("'cargo', 'nextest', 'run'"));
-    assert!(dev_check.contains("'--profile', 'ci'"));
-    let doctest_leg = dev_check
-        .split("Name = 'cargo test --doc'")
-        .nth(1)
-        .and_then(|tail| tail.split("\n        },").next())
-        .expect("dev-check must define a doctest leg before feature legs");
-    assert!(doctest_leg.contains("'cargo', 'test'"));
-    assert!(doctest_leg.contains("'--target-dir', 'target-linux'"));
-    assert!(doctest_leg.contains("'-p', 'whisper-dictate-app',\n                '--doc'"));
     assert!(outdated_workflow.contains("schedule:"));
     assert!(outdated_workflow.contains("workflow_dispatch:"));
     assert!(outdated_workflow
@@ -1377,7 +1411,6 @@ fn package_recipes_and_ci_use_the_named_shipping_profiles() {
     let linux = read_repo("scripts/linux/install-rust-ui.sh");
     let nix = read_repo("nix/package.nix");
     let test_workflow = read_repo(".github/workflows/test.yml");
-    let dev_check = read_repo("scripts/dev/dev-check.ps1");
 
     assert!(release.contains("--no-default-features --features shipping"));
     assert!(windows.contains(
@@ -1390,11 +1423,7 @@ fn package_recipes_and_ci_use_the_named_shipping_profiles() {
     assert!(local_windows.contains("--no-default-features --features shipping"));
     assert!(linux.contains("--no-default-features --features shipping"));
     assert!(nix.contains("\"--no-default-features\"") && nix.contains("\"shipping\""));
-    assert!(test_workflow.contains("os: [ubuntu-latest, windows-2025]"));
-    assert!(test_workflow.contains("feature_arg: \"--no-default-features --features shipping\""));
     assert!(test_workflow.contains("Rust build (exact shipping profile)"));
-    assert!(dev_check.contains("cargo nextest run --no-default-features --features shipping"));
-    assert!(dev_check.contains("cargo build --no-default-features --features shipping --release"));
     assert!(
         windows.contains("Verify whisper.cpp Vulkan backend is linked into the release binary")
             && windows.contains("Vulkan backend linked - found tokens"),
@@ -1709,7 +1738,7 @@ fn extracted_release_smokes_retain_the_real_artifact_contracts() {
 }
 
 #[test]
-fn windows_release_fixture_runs_in_the_required_anchor_cell() {
+fn windows_release_fixture_runs_in_the_shipping_cell() {
     let workflow = read_repo(".github/workflows/test.yml");
     let rust_features = workflow
         .split("\n  rust-features:\n")
@@ -1721,10 +1750,13 @@ fn windows_release_fixture_runs_in_the_required_anchor_cell() {
         .nth(1)
         .and_then(|step| step.split("\n      - name:").next())
         .expect("Windows fixture step");
+    assert!(fixture.contains("runner.os == 'Windows'"));
+    assert!(fixture.contains("matrix.profile.id == 'shipping'"));
+    assert!(fixture.contains("--no-default-features --features shipping"));
+    assert!(fixture.contains("--test repository_policy"));
     assert!(fixture.contains(
-        "if: env.RUN_RUST == 'true' && runner.os == 'Windows' && matrix.profile.id == env.ANCHOR_PROFILE"
+        "windows_extracted_release_scripts_parse_and_execute_cpu_fallback_fixture -- --exact"
     ));
-    assert!(fixture.contains("cargo test --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --test repository_policy windows_extracted_release_scripts_parse_and_execute_cpu_fallback_fixture -- --exact"));
     assert_eq!(
         workflow
             .matches("- name: Windows release-script fixture")

@@ -41,14 +41,18 @@ devcontainer up --workspace-folder .
 devcontainer exec --workspace-folder . cargo test --manifest-path src/rust/Cargo.toml
 ```
 
-On the repository's Windows development machines, the CI-matched gate is:
+On the repository's Windows development machines, run the local shipping gate:
 
 ```powershell
 pwsh -NoProfile -File scripts/dev/dev-check.ps1
 ```
 
-It uses Rancher Desktop's Docker `default` context and validates formatting,
-Clippy, tests, feature profiles, the shipping build, and CLI smoke commands.
+It uses Rancher Desktop's Docker `default` context to check formatting and run
+Clippy, one nextest suite (including repository policy), and doctests with the
+locked CPU `shipping` profile. It runs `wd --help`, `wd --version`, and
+`wd config path` directly on the binary built by nextest. PR CI checks alternate
+feature sets, platform-specific behavior, and release builds.
+
 Build state lives in Docker named volumes rather than on the 9p bind mount:
 `whisper-dictate-dev-cargo-home` and `whisper-dictate-dev-rustup-home` (registry
 and pinned toolchain, shared by every checkout) and one

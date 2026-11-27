@@ -14,26 +14,18 @@ fn native_windows_smoke_reserves_the_entire_nextest_pool() {
 }
 
 #[test]
-fn native_windows_smoke_runs_only_in_the_anchor_ci_feature_cell() {
+fn native_windows_smoke_runs_in_the_shipping_suite() {
     let workflow = include_str!("../../../.github/workflows/test.yml").replace("\r\n", "\n");
-    assert!(workflow.contains(
-        "ANCHOR_PROFILE: ${{ github.event_name == 'pull_request' && 'base' || 'shipping' }}"
-    ));
-    let test_steps = workflow
+    let shipping_tests = workflow
         .split("      - name: Rust tests\n")
         .nth(1)
-        .expect("main Rust tests step")
-        .split("      - name: Windows release-script fixture\n")
-        .next()
-        .unwrap();
-    let (anchor_step, non_anchor_step) = test_steps
-        .split_once("      - name: Rust tests (Windows non-anchor)\n")
-        .expect("separate Windows non-anchor test step");
+        .and_then(|step| step.split("\n      - name: ").next())
+        .expect("Windows shipping tests step");
+    assert!(shipping_tests.contains("runner.os == 'Windows'"));
+    assert!(shipping_tests.contains("matrix.profile.id == 'shipping'"));
+    assert!(shipping_tests.contains("cargo nextest run"));
+    assert!(shipping_tests.contains("-E 'not(binary(=repository_policy))'"));
     assert!(
-        anchor_step.contains("runner.os != 'Windows' || matrix.profile.id == env.ANCHOR_PROFILE")
+        !shipping_tests.contains("hidden_windows_event_loop_drains_runtime_and_tray_without_ui")
     );
-    assert!(anchor_step.contains("-E 'not(binary(=repository_policy))'"));
-    assert!(non_anchor_step.contains("runner.os == 'Windows'"));
-    assert!(non_anchor_step.contains("matrix.profile.id != env.ANCHOR_PROFILE"));
-    assert!(non_anchor_step.contains("not(test(=ui::app_tests::view::hidden_windows_event_loop_drains_runtime_and_tray_without_ui))"));
 }

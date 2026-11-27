@@ -247,7 +247,7 @@ mod windows {
     }
 
     #[test]
-    fn dev_check_detects_a_linked_worktree_and_writes_utf8_cargo_env() {
+    fn dev_check_dry_run_preserves_worktree_and_prints_shipping_gate() {
         // Build a real main checkout plus a linked worktree whose directory
         // name includes a non-ASCII character, then run the script's -DryRun
         // path from inside the worktree. The dry run still performs the
@@ -403,6 +403,29 @@ mod windows {
         assert!(
             !main_stdout.contains("config.toml,target=/repo/.cargo-cache/config.toml"),
             "a main checkout has no worktree cargo config to overlay: {main_stdout}"
+        );
+
+        let cargo_args = "--manifest-path src/rust/Cargo.toml --locked \
+                          --target-dir target-linux -p whisper-dictate-app";
+        let shipping_args = format!("{cargo_args} --no-default-features --features shipping");
+        let expected_commands = format!(
+            "cargo install cargo-nextest --locked\n\
+             cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check\n\
+             cargo clippy {cargo_args} --all-targets --features ui-egui-glow -- -D warnings\n\
+             cargo nextest run {shipping_args} --profile ci\n\
+             cargo test {shipping_args} --doc\n\
+             ./target-linux/debug/wd --help\n\
+             ./target-linux/debug/wd --version\n\
+             ./target-linux/debug/wd config path"
+        );
+        let commands = main_stdout
+            .lines()
+            .filter_map(|line| line.strip_prefix("  "))
+            .filter(|line| line.starts_with("cargo ") || line.starts_with("./target-linux/"));
+        assert!(
+            commands.eq(expected_commands.lines()),
+            "expected only the shipping validation and direct CLI smoke commands:\n\
+             {expected_commands}\nactual dry run:\n{main_stdout}"
         );
     }
 

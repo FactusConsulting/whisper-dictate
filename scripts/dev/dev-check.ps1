@@ -1,15 +1,12 @@
 #!/usr/bin/env pwsh
-# Run cargo fmt --check + clippy + test in the devcontainer image, against
-# the Linux target (x86_64-unknown-linux-gnu). Mirrors CI's
-# `rust (ubuntu-latest)` job so "green here" == "green in CI" for the lint
-# + test surface. Bypasses the native Windows MSVC/lib.exe toolchain
-# (which is broken on this dev box per the memory note).
+# Validate the Linux shipping profile in the devcontainer image without a
+# native Windows MSVC toolchain. PR CI covers alternate feature profiles
+# and platform-specific checks.
 #
 # Usage from any worktree (run from PowerShell with Rancher Desktop running):
 #
-#   pwsh scripts/dev/dev-check.ps1                  # all CI feature legs
-#   pwsh scripts/dev/dev-check.ps1 -DryRun          # print commands, no exec
-#   pwsh scripts/dev/dev-check.ps1 -SkipExtraFeatures   # only ui-egui-glow leg
+#   pwsh -NoProfile -File scripts/dev/dev-check.ps1
+#   pwsh -NoProfile -File scripts/dev/dev-check.ps1 -DryRun  # print argv; no Docker
 #
 # Requires:
 #   - Rancher Desktop running with its Moby container engine enabled
@@ -17,18 +14,8 @@
 # The image is built once on first run (~5 min); thereafter the layer cache
 # keeps subsequent runs near-instant.
 
-param(
-    [switch]$DryRun,
-    [switch]$SkipExtraFeatures,
-    # Backwards-compat shim: the original script took `-Features <list>`
-    # and ran a single cargo test pass with that feature list. The
-    # rewrite drives the full CI matrix unconditionally, so this
-    # parameter is now ignored -- accepted only to avoid a
-    # parameter-binding error for invocations baked into AGENTS.md /
-    # local muscle memory. Remove once AGENTS.md and the developer team
-    # have migrated.
-    [string]$Features
-)
+[CmdletBinding()]
+param([switch]$DryRun)
 
 $ErrorActionPreference = "Stop"
 
@@ -125,15 +112,11 @@ if (Test-Path -LiteralPath $dotGit -PathType Leaf) {
             '-e', 'GIT_CONFIG_KEY_1=safe.directory',
             '-e', 'GIT_CONFIG_VALUE_1=/main-git'
         )
-        # `cargo test` strips GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE from the
-        # test binaries it launches (so tests stay runnable from git hooks),
-        # which defeats the docker env above for the repository_policy leg.
-        # Cargo applies the CARGO_HOME config `[env]` table to the processes
-        # it spawns, so persist the same values there. `force = true` matters:
-        # a plain `[env]` assignment is skipped when the ambient docker -e
-        # already set the variable, and cargo's own strip then wins. The
-        # docker -e flags keep covering direct container shells and the
-        # nextest subcommand.
+        # Cargo can strip inherited Git variables when launching tests.
+        # Persist the repository selection in the CARGO_HOME [env] table
+        # for Cargo-spawned processes. Force the assignments so they apply
+        # even when Docker already set the same variables. The Docker env
+        # also covers nextest and commands run directly in the container.
         $cargoHome = Join-Path $repoRoot '.cargo-cache'
         # .NET API: New-Item lacks -LiteralPath on Windows PowerShell 5.1.
         [System.IO.Directory]::CreateDirectory($cargoHome) | Out-Null
@@ -154,199 +137,56 @@ if (Test-Path -LiteralPath $dotGit -PathType Leaf) {
     }
 }
 
-# ---- CI parity matrix ------------------------------------------------------
-#
-# The Ubuntu rust job in .github/workflows/test.yml runs FOUR Rust
-# invocations: one clippy + a default `cargo test` + a feature-gated
-# test for `rust-hotkeys` + a feature-gated test for `audio-capture`.
-# Running only the default leg locally lets a feature-gated regression
-# slip through to CI. So this
-# wrapper drives the same four legs by default. `-SkipExtraFeatures`
-# limits it to the ui-egui-glow leg for fast local iteration where the
-# developer knows the feature paths are untouched.
-#
-# Centralising the cargo argv lists in one place also gives us a
-# testable surface: a smoke test can dot-source this script with
-# `-DryRun` set and assert the printed argv matches the expected
-# matrix.
-
-function Get-CargoLegs {
-    [OutputType([hashtable[]])]
-    param([switch]$IncludeExtraFeatures)
-    $legs = @(
-        @{
-            Name = 'cargo install cargo-nextest --locked'
-            Argv = @('cargo', 'install', 'cargo-nextest', '--locked')
-        },
-        @{
-            Name = 'cargo fmt --all -- --check'
-            Argv = @('cargo', 'fmt', '--manifest-path', 'src/rust/Cargo.toml', '--all', '--', '--check')
-        },
-        @{
-            Name = 'cargo clippy (ui-egui-glow)'
-            Argv = @(
-                'cargo', 'clippy',
-                '--manifest-path', 'src/rust/Cargo.toml',
-                '--target-dir', 'target-linux',
-                '-p', 'whisper-dictate-app',
-                '--all-targets',
-                '--features', 'ui-egui-glow',
-                '--', '-D', 'warnings'
-            )
-        },
-        @{
-            Name = 'cargo nextest run (default)'
-            Argv = @(
-                'cargo', 'nextest', 'run',
-                '--manifest-path', 'src/rust/Cargo.toml',
-                '--locked',
-                '--target-dir', 'target-linux',
-                '-p', 'whisper-dictate-app',
-                '--profile', 'ci',
-                # CI's nextest legs exclude repository_policy and run it via
-                # plain `cargo test` instead (test.yml:193,452). Mirror both
-                # halves: nextest drops the binary from its pool, the leg
-                # below runs it exactly like CI's unit job.
-                '-E', 'not(binary(=repository_policy))'
-            )
-        },
-        @{
-            Name = 'cargo test --test repository_policy'
-            Argv = @(
-                'cargo', 'test',
-                '--manifest-path', 'src/rust/Cargo.toml',
-                '--locked',
-                '--target-dir', 'target-linux',
-                '-p', 'whisper-dictate-app',
-                '--test', 'repository_policy'
-            )
-        },
-        @{
-            Name = 'cargo test --doc'
-            Argv = @(
-                'cargo', 'test',
-                '--manifest-path', 'src/rust/Cargo.toml',
-                '--locked',
-                '--target-dir', 'target-linux',
-                '-p', 'whisper-dictate-app',
-                '--doc'
-            )
-        },
-        # Rust CLI smoke -- CIs Ubuntu rust job runs `cargo run -- --help`
-        # and `cargo run -- config path` (test.yml:372-375) WITHOUT extra
-        # features, so they belong outside the IncludeExtraFeatures block.
-        # A CLI-only change (clap derive bug, broken config schema) needs
-        # to fail the fast `-SkipExtraFeatures` path too -- otherwise the
-        # wrapper prints `OK -- ready to push` even though required CI
-        # will fail.
-        @{
-            Name = 'cargo run -- --help'
-            Argv = @(
-                'cargo', 'run', '-q',
-                '--manifest-path', 'src/rust/Cargo.toml',
-                '--target-dir', 'target-linux',
-                '-p', 'whisper-dictate-app',
-                '--', '--help'
-            )
-        },
-        @{
-            Name = 'cargo run -- config path'
-            Argv = @(
-                'cargo', 'run', '-q',
-                '--manifest-path', 'src/rust/Cargo.toml',
-                '--target-dir', 'target-linux',
-                '-p', 'whisper-dictate-app',
-                '--', 'config', 'path'
-            )
-        }
-    )
-    if ($IncludeExtraFeatures) {
-        $legs += @{
-            Name = 'cargo nextest run --features rust-hotkeys'
-            Argv = @(
-                'cargo', 'nextest', 'run',
-                '--manifest-path', 'src/rust/Cargo.toml',
-                '--locked',
-                '--target-dir', 'target-linux',
-                '-p', 'whisper-dictate-app',
-                '--profile', 'ci',
-                '-E', 'not(binary(=repository_policy))',
-                '--features', 'rust-hotkeys'
-            )
-        }
-        # The in-process resume path is cfg(all(rust-hotkeys, rust-injection)),
-        # so the dead-manager regressions compile in NEITHER standalone
-        # cell. CI type-checks this pair and runs its partial-set test in
-        # the `features` cell; the full suite here is the stricter local
-        # mirror.
-        $legs += @{
-            Name = 'cargo nextest run --features rust-hotkeys,rust-injection'
-            Argv = @(
-                'cargo', 'nextest', 'run',
-                '--manifest-path', 'src/rust/Cargo.toml',
-                '--locked',
-                '--target-dir', 'target-linux',
-                '-p', 'whisper-dictate-app',
-                '--profile', 'ci',
-                '-E', 'not(binary(=repository_policy))',
-                '--features', 'rust-hotkeys,rust-injection'
-            )
-        }
-        $legs += @{
-            Name = 'cargo nextest run --features audio-capture'
-            Argv = @(
-                'cargo', 'nextest', 'run',
-                '--manifest-path', 'src/rust/Cargo.toml',
-                '--locked',
-                '--target-dir', 'target-linux',
-                '-p', 'whisper-dictate-app',
-                '--profile', 'ci',
-                '-E', 'not(binary(=repository_policy))',
-                '--features', 'audio-capture'
-            )
-        }
-        $legs += @{
-            Name = 'cargo nextest run --no-default-features --features shipping'
-            Argv = @(
-                'cargo', 'nextest', 'run',
-                '--manifest-path', 'src/rust/Cargo.toml',
-                '--locked',
-                '--target-dir', 'target-linux',
-                '-p', 'whisper-dictate-app',
-                '--profile', 'ci',
-                '-E', 'not(binary(=repository_policy))',
-                '--no-default-features',
-                '--features', 'shipping'
-            )
-        }
-        # CI's Rust job builds the exact canonical shipping profile in release mode
-        # (test.yml:360-371) as a compile-only smoke for the whisper.cpp /
-        # whisper-rs link boundary. Mirror it here so a whisper-rs API break
-        # surfaces before tagged releases. `cargo test` is overkill (whisper-rs
-        # tests want a GGML fixture we don't ship), so we use `cargo build`
-        # to match CI exactly.
-        $legs += @{
-            Name = 'cargo build --no-default-features --features shipping --release'
-            Argv = @(
-                'cargo', 'build',
-                '--manifest-path', 'src/rust/Cargo.toml',
-                '--target-dir', 'target-linux',
-                '-p', 'whisper-dictate-app',
-                '--no-default-features',
-                '--features', 'shipping',
-                '--release'
-            )
-        }
+# Use one Cargo feature set and target directory for the local shipping gate.
+# The unfiltered nextest run includes repository_policy and builds wd for
+# the integration tests, so the CLI smoke can reuse that executable.
+$CargoArgs = @(
+    '--manifest-path', 'src/rust/Cargo.toml',
+    '--locked',
+    '--target-dir', 'target-linux',
+    '-p', 'whisper-dictate-app'
+)
+$ShippingCargoArgs = $CargoArgs + @('--no-default-features', '--features', 'shipping')
+$legs = @(
+    @{
+        Name = 'cargo install cargo-nextest --locked'
+        Argv = @('cargo', 'install', 'cargo-nextest', '--locked')
+    },
+    @{
+        Name = 'cargo fmt --all -- --check'
+        Argv = @('cargo', 'fmt', '--manifest-path', 'src/rust/Cargo.toml', '--all', '--', '--check')
+    },
+    @{
+        Name = 'cargo clippy (ui-egui-glow)'
+        Argv = @('cargo', 'clippy') + $CargoArgs + @('--all-targets', '--features', 'ui-egui-glow', '--', '-D', 'warnings')
+    },
+    @{
+        Name = 'cargo nextest run --no-default-features --features shipping'
+        Argv = @('cargo', 'nextest', 'run') + $ShippingCargoArgs + @('--profile', 'ci')
+    },
+    @{
+        Name = 'cargo test --doc'
+        Argv = @('cargo', 'test') + $ShippingCargoArgs + @('--doc')
+    },
+    @{
+        Name = 'CLI smoke: wd --help'
+        Argv = @('./target-linux/debug/wd', '--help')
+    },
+    @{
+        Name = 'CLI smoke: wd --version'
+        Argv = @('./target-linux/debug/wd', '--version')
+    },
+    @{
+        Name = 'CLI smoke: wd config path'
+        Argv = @('./target-linux/debug/wd', 'config', 'path')
     }
-    return $legs
-}
+)
 
 # Linux-side build state lives in Docker named volumes, not on the bind
 # mount: Rancher Desktop serves the repo over 9p, and the linker's output
 # written through that mount intermittently comes back with zeroed pages,
 # which surfaces as SIGSEGV in whichever test binary was corrupted. The
-# volumes are mounted at the same /repo/... paths cargo already uses, so
-# the cargo argv matrix above is unchanged.
+# volumes are mounted at the /repo/... paths used by Cargo and the CLI smoke.
 #
 # The registry and toolchain volumes are shared by every checkout. The
 # target volume is per checkout: every worktree is mounted at /repo, so a
@@ -380,14 +220,12 @@ $VolumePrepArgs = @('--context', $DockerContext, 'run', '--rm', '--user', 'root'
 )
 Write-Host "[dev-check] target volume $TargetVolume (registry + toolchain volumes shared)" -ForegroundColor Cyan
 
-# When dot-sourced for tests, expose the function and exit before any
-# docker side-effects.
+# Print the plan and return before any Docker side effects.
 if ($DryRun) {
     Write-Host '[dry-run] docker volume prep' -ForegroundColor Yellow
     Write-Host ('  docker ' + ($VolumePrepArgs -join ' '))
     Write-Host '[dry-run] docker volume mounts' -ForegroundColor Yellow
     Write-Host ('  ' + ($VolumeMounts -join ' '))
-    $legs = Get-CargoLegs -IncludeExtraFeatures:(-not $SkipExtraFeatures)
     foreach ($leg in $legs) {
         Write-Host "[dry-run] $($leg.Name)" -ForegroundColor Yellow
         Write-Host ('  ' + ($leg.Argv -join ' '))
@@ -415,10 +253,8 @@ function Invoke-InContainer([string[]]$cmd) {
     # `docker run --rm` invocations without being downloaded per call
     # (`docker run --rm` does NOT run the devcontainer `postCreateCommand`).
     #
-    # The caller passes the cargo command as a string array so the
-    # `--features <list>` flag survives bash word-splitting -- a quoted
-    # `"rust-hotkeys audio-capture"` would be interpolated into
-    # `bash -lc` as a bare word and split before cargo received it.
+    # Pass the command as an argument array directly to Docker, without
+    # shell interpolation.
     $args = @(
         '--context', $DockerContext,
         'run', '--rm',
@@ -440,9 +276,9 @@ function Invoke-InContainer([string[]]$cmd) {
     if ($LASTEXITCODE -ne 0) { throw "container command failed: $($cmd -join ' ')" }
 }
 
-$legs = Get-CargoLegs -IncludeExtraFeatures:(-not $SkipExtraFeatures)
 foreach ($leg in $legs) {
     Write-Host "[dev-check] $($leg.Name)" -ForegroundColor Cyan
+    Write-Host ('  ' + ($leg.Argv -join ' '))
     Invoke-InContainer $leg.Argv
 }
 

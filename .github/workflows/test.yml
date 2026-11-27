@@ -1,9 +1,8 @@
 name: tests
 
-# Primary CI gate. Gives repository policy, doctests, Rust feature tests, and
-# CLI smoke one owner each on every push to main and pull request. It is also
-# invoked via workflow_call from release.yml so a tag never ships if any job
-# fails.
+# Primary CI gate. Test the shipping profile once per OS. Keep alternate
+# feature checks, repository policy, and optimized-binary smokes focused.
+# Releases reuse this workflow when the tagged commit has no successful push CI.
 #
 # Required-status-check contexts (per the protected-branch ruleset — do NOT
 # rename these job/matrix ids without updating the ruleset):
@@ -13,10 +12,6 @@ name: tests
 #   - smoke (windows-2025)      (jobs.smoke matrix)
 #   - rust  (ubuntu-latest)     (jobs.rust  matrix — aggregator over rust-features)
 #   - rust  (windows-2025)      (jobs.rust  matrix — aggregator over rust-features)
-# The groq-integration and rust-features / rust-release jobs are NOT required
-# themselves — rust-features is what the required `rust` aggregator gates on;
-# rust-release runs on push-to-main and workflow_call (release) only and
-# never in PR CI (release-profile compile is ~10 min extra per push).
 
 on:
   push:
@@ -336,76 +331,30 @@ jobs:
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows/tests/test-legacy-installer.ps1
 
   smoke:
-    # Native CLI sanity: --help and --version must stay headless and cheap.
-    #
-    # Job-level `if:` would skip BEFORE the matrix expanded and the
-    # required `smoke (ubuntu-latest)` / `smoke (windows-2025)` contexts
-    # would never be emitted — branch protection would hang. Step-level
-    # `if:` keeps the matrix legs running and each step short-circuits
-    # to a no-op on docs-only PRs.
-    #
-    # `if: !cancelled()` so a `changes` failure does
-    # NOT silently skip these required matrix legs. The first step then
-    # explicitly fails if `changes` did not succeed.
-    needs: changes
+    # Keep the required smoke contexts. The shipping matrix checks the CLI
+    # against the executable nextest already built.
+    needs: [changes, rust-features]
     if: ${{ !cancelled() }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-2025]
-    runs-on: ${{ matrix.os == 'ubuntu-latest' && 'arc-runner-public' || matrix.os }}
-    env:
-      RUN_SMOKE: ${{ needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}
+    runs-on: arc-runner-public
     steps:
       - name: Fail required check if change detection broke
         if: needs.changes.result != 'success'
         run: |
-          echo "::error::changes job did not succeed (result=${{ needs.changes.result }}); failing required \`smoke\` matrix leg to avoid silently skipping tests on a code PR"
+          echo "::error::changes job did not succeed (result=${{ needs.changes.result }}); cannot verify CLI smoke coverage"
           exit 1
-      - if: env.RUN_SMOKE != 'true'
-        run: echo "::notice::Skipping smoke matrix leg — no code changes detected"
-      - uses: actions/checkout@v7
-        if: env.RUN_SMOKE == 'true'
-        with:
-          ref: ${{ inputs.ref }}
-      - name: Install Linux build tools and Rust UI build deps
-        # The arc-runner-public image ships without a C toolchain (GitHub-hosted
-        # images had one). Plain apt, not cache-apt-pkgs-action: that action
-        # restored an empty cache on the ARC runners and skipped the install.
-        if: env.RUN_SMOKE == 'true' && runner.os == 'Linux'
+      - name: Require successful shipping CLI smokes for Rust changes
+        if: needs.changes.outputs.rust == 'true' && needs.rust-features.result != 'success'
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential cmake clang libclang-dev libssl-dev pkg-config libdbus-1-dev libwayland-dev libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev
-      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
-        if: env.RUN_SMOKE == 'true'
-      - uses: Swatinem/rust-cache@v2
-        if: env.RUN_SMOKE == 'true'
-        with:
-          workspaces: "src/rust -> target"
-          shared-key: "rust-smoke-${{ matrix.os }}"
-      - name: Native CLI --help
-        if: env.RUN_SMOKE == 'true'
-        run: cargo run --locked --manifest-path src/rust/Cargo.toml -- --help
-      - name: Native CLI --version
-        if: env.RUN_SMOKE == 'true'
-        run: cargo run --locked --manifest-path src/rust/Cargo.toml -- --version
-      - name: Native CLI config path
-        if: env.RUN_SMOKE == 'true'
-        run: cargo run --locked --manifest-path src/rust/Cargo.toml -- config path
+          echo "::error::rust-features did not succeed; CLI smoke checks are not green"
+          exit 1
+      - run: echo "CLI smoke gate OK for ${{ matrix.os }}"
 
-  # ---------------------------------------------------------------------------
-  # rust-features: parallelises the previously sequential fmt / clippy / test
-  # legs. Each cargo invocation runs in its own matrix cell so Cargo's
-  # per-feature fingerprint no longer discards artifacts between successive
-  # steps sharing one job. Split designed after wall-clock analysis: the old
-  # single-job rust leg hit ~18 min on Windows because every feature flip
-  # recompiled the crate + affected deps; per-leg cells push that toward the
-  # slowest single build (~6-8 min).
-  #
-  # NOT required by branch protection itself — the `rust` aggregator below
-  # keeps the `rust (ubuntu-latest)` / `rust (windows-2025)` context names.
-  # Change here freely; only touch the aggregator when renaming contexts.
-  # ---------------------------------------------------------------------------
+  # Shipping runs the full suite. Keep Clippy and PR-only compatibility
+  # checks separate so their cache and compiler settings stay independent.
   rust-features:
     needs: changes
     if: ${{ !cancelled() }}
@@ -413,41 +362,11 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-2025]
-        # Each profile owns one role: `test` runs the suite for its
-        # `feature_arg` (the verbatim cargo flag, empty for the default
-        # feature set), `clippy` lints, `features` type-checks the partial
-        # feature sets. Two test cells bound the feature space: `base` (no
-        # optional feature) and `shipping` (all of them); every test that
-        # compiles under a partial set also compiles under one of those two,
-        # except where a test needs a feature AND the absence of another,
-        # which the `features` cell runs on its own. The partial sets
-        # themselves can still break alone, because cargo features are
-        # additive: code gated on one may reference an item only another
-        # provides. The `features` cell catches that with `cargo check
-        # --all-targets` per set, tests included, without the codegen and
-        # link of a full test build. Pull requests run every cell; push to
-        # main and the release workflow_call run only the `shipping` and
-        # `clippy-glow` cells (see `exclude` below).
         profile:
-          - id: base
-            feature_arg: ""
-            role: test
-          # Exact normal package profile. This runs on Linux and Windows so the
-          # supported artifact feature surface is tested before release.
           - id: shipping
-            feature_arg: "--no-default-features --features shipping"
-            role: test
           - id: clippy-glow
-            feature_arg: "--features ui-egui-glow"
-            role: clippy
           - id: features
-            feature_arg: ""
-            role: features
-        # Push to main and the release workflow_call (whose `github.event_name`
-        # is the caller's event) test only the exact shipped feature set: the
-        # standalone cells already gated the PR that produced the commit.
-        # Excluding them here means no runner is allocated for them at all.
-        exclude: ${{ fromJSON(github.event_name == 'pull_request' && '[]' || '[{"profile":{"id":"base"}},{"profile":{"id":"features"}}]') }}
+        exclude: ${{ fromJSON(github.event_name == 'pull_request' && '[]' || '[{"profile":{"id":"features"}}]') }}
     runs-on: ${{ matrix.os == 'ubuntu-latest' && 'arc-runner-public' || matrix.os }}
     env:
       # `rust` output is the per-language gate (issue #590):
@@ -456,11 +375,6 @@ jobs:
       # of wall-clock on Windows). Non-PR events run unless the change is a
       # release-version-only bump.
       RUN_RUST: ${{ needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}
-      # The anchor cell owns the once-per-run checks (fmt, the Windows native
-      # GUI smoke, the Windows release-script fixture): `base` on pull
-      # requests, `shipping` wherever `base` is excluded. `shipping` is a
-      # superset of the default features, so it compiles the same smoke.
-      ANCHOR_PROFILE: ${{ github.event_name == 'pull_request' && 'base' || 'shipping' }}
     steps:
       - name: Fail matrix leg if change detection broke
         if: needs.changes.result != 'success'
@@ -509,7 +423,7 @@ jobs:
           # the toolchain-component policy check happy.
           components: clippy, llvm-tools-preview
       - name: Install cargo-nextest
-        if: env.RUN_RUST == 'true' && (matrix.profile.role == 'test' || (matrix.profile.role == 'features' && runner.os == 'Linux'))
+        if: env.RUN_RUST == 'true' && (matrix.profile.id == 'shipping' || matrix.profile.id == 'features')
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest
@@ -531,46 +445,28 @@ jobs:
           workspaces: "src/rust -> ../target"
           key: ${{ matrix.profile.id }}
       - name: Rust format
-        # fmt is OS- and feature-independent, so run it exactly once (in
-        # the ubuntu anchor cell) instead of on every matrix leg.
-        if: env.RUN_RUST == 'true' && matrix.profile.id == env.ANCHOR_PROFILE && runner.os == 'Linux'
+        # Formatting is OS- and feature-independent.
+        if: env.RUN_RUST == 'true' && matrix.profile.id == 'shipping' && runner.os == 'Linux'
         run: cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
       - name: Rust Clippy
-        # Everyday CI is glow-only (our shipping renderer) so it stays fast and
-        # off the wgpu/DX12 stack. The wgpu exit route is build-validated
-        # separately by the periodic renderer-matrix workflow. Hardcoded
-        # feature set so the release-workflow test's literal string check
-        # keeps working — the `clippy-glow` profile is the only clippy cell,
-        # so no template needed.
-        if: env.RUN_RUST == 'true' && matrix.profile.role == 'clippy'
-        run: cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --features ui-egui-glow -- -D warnings
-      - name: Clippy report for Sonar
-        # The same invocation as the gate above, so cargo replays its cached
-        # result as JSON instead of checking the crate again.
-        if: env.RUN_RUST == 'true' && matrix.profile.role == 'clippy' && runner.os == 'Linux'
-        run: cargo clippy --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --all-targets --features ui-egui-glow --message-format=json -- -D warnings > clippy-report.json
+        if: env.RUN_RUST == 'true' && matrix.profile.id == 'clippy-glow' && runner.os == 'Windows'
+        run: cargo clippy --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --all-targets --features ui-egui-glow -- -D warnings
+      - name: Rust Clippy with a report for Sonar
+        if: env.RUN_RUST == 'true' && matrix.profile.id == 'clippy-glow' && runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo clippy --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --all-targets --features ui-egui-glow --message-format=json -- -D warnings \
+            | tee clippy-report.json | jq -r '.message.rendered // empty'
       - name: Upload the clippy report
-        if: env.RUN_RUST == 'true' && matrix.profile.role == 'clippy' && runner.os == 'Linux'
+        if: env.RUN_RUST == 'true' && matrix.profile.id == 'clippy-glow' && runner.os == 'Linux'
         uses: actions/upload-artifact@v7
         with:
           name: sonar-clippy
           path: clippy-report.json
           retention-days: 1
       - name: Rust tests
-        # Runs against the profile's specific feature set. Empty
-        # `feature_arg` → default features. The rust-hotkeys and
-        # audio-capture cells cover their respective backends
-        # (rdev/enigo, cpal/rubato); base covers the default
-        # feature intersection.
-        # The native hidden-window smoke is feature-independent and initializes
-        # the renderer on Windows. Run it once in the anchor cell, not in every
-        # parallel feature cell; the other cells still run their full feature
-        # tests. See #892 for the intermittent renderer-startup stall.
-        if: env.RUN_RUST == 'true' && matrix.profile.role == 'test' && (runner.os != 'Windows' || matrix.profile.id == env.ANCHOR_PROFILE) && !(runner.os == 'Linux' && matrix.profile.id == 'shipping')
-        run: cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci -E 'not(binary(=repository_policy))' ${{ matrix.profile.feature_arg }}
-      - name: Rust tests (Windows non-anchor)
-        if: env.RUN_RUST == 'true' && runner.os == 'Windows' && matrix.profile.role == 'test' && matrix.profile.id != env.ANCHOR_PROFILE
-        run: cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci -E 'not(binary(=repository_policy)) and not(test(=ui::app_tests::view::hidden_windows_event_loop_drains_runtime_and_tray_without_ui))' ${{ matrix.profile.feature_arg }}
+        if: env.RUN_RUST == 'true' && matrix.profile.id == 'shipping' && runner.os == 'Windows'
+        run: cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci -E 'not(binary(=repository_policy))' --no-default-features --features shipping
       - name: Rust tests with coverage
         # The Linux shipping suite runs once, instrumented, and its LCOV is
         # Sonar's coverage report (the `sonar` job below). cargo-llvm-cov
@@ -598,34 +494,43 @@ jobs:
           name: sonar-lcov
           path: lcov.info
           retention-days: 1
-      # Each partial feature set the product supports on its own: the two
-      # backends alone, the hotkey+injection pair the in-process resume path
-      # (`in_process::resume_key_names_from_env`) is gated on, and the
-      # local-session trio the native dictation session is gated on.
+      - name: Native CLI smoke
+        if: env.RUN_RUST == 'true' && matrix.profile.id == 'shipping'
+        shell: bash
+        env:
+          WD_BIN: ${{ runner.os == 'Windows' && 'target/debug/wd.exe' || 'target/llvm-cov-target/debug/wd' }}
+          LLVM_PROFILE_FILE: /dev/null
+        run: |
+          test -x "$WD_BIN"
+          "$WD_BIN" --help
+          "$WD_BIN" --version
+          "$WD_BIN" config path
       - name: Rust feature-set checks
-        # Warnings are errors here: a partial set that compiles code nothing
-        # in it can reach shows up as dead code, the sign of a cfg gate that
-        # names too few features.
-        if: env.RUN_RUST == 'true' && matrix.profile.role == 'features'
+        if: env.RUN_RUST == 'true' && matrix.profile.id == 'features'
         shell: bash
         env:
           RUSTFLAGS: -D warnings
         run: |
-          set -euo pipefail
+          cargo check --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --all-targets
           for features in rust-hotkeys audio-capture rust-hotkeys,rust-injection whisper-rs-local,audio-capture,rust-injection; do
             echo "::group::cargo check --features $features"
             cargo check --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --all-targets --features "$features"
             echo "::endgroup::"
           done
+      - name: Rust tests that need the default feature set
+        # Exercise behavior omitted from the shipping build, not a second full suite.
+        if: env.RUN_RUST == 'true' && matrix.profile.id == 'features'
+        run: >-
+          cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target
+          -p whisper-dictate-app --profile ci --lib --bin wd
+          -E 'test(/(_stub_|_without_feature|::reduced_build_|stock_build|unsupported_native_error_is_mapped_to_rebuild_hint|run_with_reports_unsupported_when_local_whisper_feature_absent)/)'
       - name: Rust tests that need a partial feature set
-        # `cfg(all(rust-hotkeys, rust-injection, not(whisper-rs-local)))`:
-        # compiled in neither `base` nor `shipping`. The assertion is
-        # platform-independent, so Linux runs it once.
-        if: env.RUN_RUST == 'true' && matrix.profile.role == 'features' && runner.os == 'Linux'
-        run: cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci --features rust-hotkeys,rust-injection -E 'test(=runtime::rust_session_sink_tests::production_sink_refuses_without_real_backends)'
+        # This guard is excluded by both default and shipping; run it once on Linux.
+        if: env.RUN_RUST == 'true' && matrix.profile.id == 'features' && runner.os == 'Linux'
+        run: cargo nextest run --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --profile ci --lib --features rust-hotkeys,rust-injection -E 'test(=runtime::rust_session_sink_tests::production_sink_refuses_without_real_backends)'
       - name: Windows release-script fixture
-        if: env.RUN_RUST == 'true' && runner.os == 'Windows' && matrix.profile.id == env.ANCHOR_PROFILE
-        run: cargo test --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --test repository_policy windows_extracted_release_scripts_parse_and_execute_cpu_fallback_fixture -- --exact
+        if: env.RUN_RUST == 'true' && runner.os == 'Windows' && matrix.profile.id == 'shipping'
+        run: cargo test --manifest-path src/rust/Cargo.toml --locked --target-dir target -p whisper-dictate-app --no-default-features --features shipping --test repository_policy windows_extracted_release_scripts_parse_and_execute_cpu_fallback_fixture -- --exact
       - name: Audio capture report gate
         # The shipping cell feeds the required rust aggregators on pull
         # requests. Do not hide build failures or unexpected self-test errors
@@ -665,11 +570,8 @@ jobs:
         run: |
           echo "::error::changes job did not succeed (result=${{ needs.changes.result }}); failing required \`rust (${{ matrix.os }})\` check"
           exit 1
-      - name: Fail required check if rust-features matrix did not succeed
-        # `skipped` is fine — that's the docs-only-PR path where every leg
-        # short-circuited. Anything else (failure, cancelled) MUST bubble
-        # up to the required aggregator.
-        if: needs.rust-features.result != 'success' && needs.rust-features.result != 'skipped'
+      - name: Require feature validation for Rust changes
+        if: needs.changes.outputs.rust == 'true' && needs.rust-features.result != 'success'
         run: |
           echo "::error::rust-features matrix did not succeed (result=${{ needs.rust-features.result }}); failing required \`rust (${{ matrix.os }})\` check"
           exit 1
@@ -834,39 +736,19 @@ jobs:
           pwsh -NoProfile -ExecutionPolicy Bypass -File .release-tools/scripts/windows/tests/smoke-release-binaries.ps1
 
       - name: injection-idempotency regression test (self-test)
-        # The ubuntu 26.04 integration job runs this same
-        # verb on Linux (see `integration-ubuntu-2604` below), but the
-        # bug class this catches — modifier state leakage on the
-        # SendInput path — is *Windows*-specific. Running the harness on
-        # both matrix legs (ubuntu-latest + windows-2025) exercises the
-        # `enigo` backend on the Windows runner where a stuck-Shift
-        # regression would actually surface.
-        #
-        # Default dry-run: no OS side effects on either matrix leg, so
-        # this is safe under `-D warnings` alongside every other rust
-        # step. NO `|| true` — a real regression here MUST fail CI.
-        # PR CI does NOT run this (release-profile compile is expensive);
-        # PR-time coverage lives in `integration-ubuntu-2604` which runs
-        # the same self-test verb on the ubuntu 26.04 container leg.
+        # Keep the Windows SendInput regression on pull requests. Linux
+        # also exercises injection in the Ubuntu 26.04 compatibility job.
         if: env.RUN_RELEASE == 'true'
-        run: cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --no-default-features --features shipping -- self-test injection-idempotency --iterations 10 --json
+        shell: bash
+        run: |
+          wd=target/release/wd
+          if [[ "$RUNNER_OS" == Windows ]]; then wd+=.exe; fi
+          "$wd" self-test injection-idempotency --iterations 10 --json
 
   integration-ubuntu-2604:
-    # Runs the Rust test suites inside a purpose-built Ubuntu
-    # 26.04 container (docker/ci-ubuntu2604/Dockerfile) so we get one
-    # environment that matches what users will be on when 26.04 becomes
-    # the default LTS. NOT a required check yet — informational until we
-    # have a few green runs. To promote to required: add
-    # `integration-ubuntu-2604` to the protected-branch ruleset and add
-    # this line to the required-status list header comment at the top of
-    # this file.
-    #
-    # Bootstrap-friendly image resolution: `docker pull` first (fast when
-    # `.github/workflows/build-ci-images.yml` has published the image on
-    # a prior merge), fall back to `docker build` when the tag doesn't
-    # exist yet. This keeps the very first PR (which introduces the
-    # container) exercising the same Dockerfile it will publish once
-    # merged, without a chicken-and-egg on the registry.
+    # Exercise the shipping executable against Ubuntu 26.04 system libraries
+    # without rerunning the Rust suite. Prefer the published image; build it
+    # inline when the Dockerfile changes or the image isn't available yet.
     needs: changes
     # Needs a Docker daemon, so it runs on the dind scale set. That set is
     # never offered to fork PRs: they skip this job instead of running it.
@@ -876,10 +758,7 @@ jobs:
       contents: read
       packages: read
     env:
-      # The container owns Ubuntu 26.04 runtime compatibility. Repository
-      # policy and doctests are owned by `unit`, so docs/policy-only changes do
-      # not start this heavyweight environment suite. Workflow and packaging
-      # changes remain in the `rust` filter and still exercise it.
+      # Only Rust-relevant changes need the container runtime checks.
       RUN_INTEG: ${{ needs.changes.result == 'success' && needs.changes.outputs.rust == 'true' }}
       FORCE_IMAGE_BUILD: ${{ github.event_name == 'pull_request' && needs.changes.outputs.ci_image == 'true' }}
       IMAGE: ghcr.io/factusconsulting/whisper-dictate-ci-ubuntu2604:latest
@@ -923,92 +802,41 @@ jobs:
             echo "image not yet published, building inline from docker/ci-ubuntu2604/"
             build_image
           fi
-      - name: Rust tests except repository policy inside container
+      - name: Build the shipping CLI inside the container
         if: env.RUN_INTEG == 'true'
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
-            bash -c '
-              test_args=()
-              for test_file in src/rust/tests/*.rs; do
-                test_name="${test_file##*/}"
-                test_name="${test_name%.rs}"
-                if [ "$test_name" != repository_policy ]; then
-                  test_args+=(--test "$test_name")
-                fi
-              done
-              cargo test --manifest-path src/rust/Cargo.toml --target-dir target \
-                -p whisper-dictate-app --lib --bins "${test_args[@]}"
-            '
+            cargo build --locked --release --manifest-path src/rust/Cargo.toml --target-dir target \
+              -p whisper-dictate-app --no-default-features --features shipping --bin wd
       - name: CLI smoke (models list) inside container
         if: env.RUN_INTEG == 'true'
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
-            bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app -- models list"
+            target/release/wd models list
       - name: PTT-wedge regression test (self-test)
-        # Regression coverage for the push-to-talk wedge class of bugs —
-        # the headless harness exercises the shared `hotkey::inject_guard` +
-        # tracker filter both drivers converge on, with a burst of synthetic
-        # self-injected events. Feature-gated behind
-        # `rust-hotkeys,rust-injection`; the Ubuntu 26.04 CI image bakes in
-        # every dep both features need (rdev via libxi-dev/libxtst-dev,
-        # evdev is pure-Rust, enigo pulls only crates already covered).
-        # NO `|| true` — a real regression here MUST fail CI. Iteration
-        # count intentionally >=5 so intermittent races cannot slip past.
-        # Every release run in this job builds the `shipping` feature set,
-        # a superset of what each self-test needs, so the job compiles the
-        # release binary once and the later steps reuse it.
         if: env.RUN_INTEG == 'true'
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
-            bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --no-default-features --features shipping -- self-test ptt-wedge --iterations 5 --json"
+            target/release/wd self-test ptt-wedge --iterations 5 --json
       - name: injection-idempotency regression test (self-test)
-        # Sibling of ptt-wedge, different bug class: this verb probes
-        # INJECTION-side state accumulation (plan-builder determinism,
-        # guard bracket counter, backend-selection cache) instead of the
-        # hotkey tracker. Default dry-run — no OS side effects — so it's
-        # safe in this container. Iteration count intentionally >=10
-        # (higher than ptt-wedge) so intermittent state leaks are more
-        # likely to surface. Same feature-gate as ptt-wedge.
-        # NO `|| true` — a real regression here MUST fail CI.
         if: env.RUN_INTEG == 'true'
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
-            bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --no-default-features --features shipping -- self-test injection-idempotency --iterations 10 --json"
+            target/release/wd self-test injection-idempotency --iterations 10 --json
       - name: audio-capture self-test
-        # Exercises the cpal capture path AND the PipeWire quantum lesson
-        # from v1.20.6 (`PIPEWIRE_QUANTUM=2048` when unset). Feature-gated
-        # behind `audio-capture`; the Ubuntu 26.04 CI image bakes in
-        # libasound2-dev so cpal's ALSA backend links.
-        #
-        # Build failures, panics, malformed reports and capture regressions
-        # fail this step. Only a validated no-input-device report is a skip.
+        # Fail malformed reports and regressions; only a confirmed missing
+        # input device is a skip.
         if: env.RUN_INTEG == 'true'
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
-            bash -ec '
-              cargo build --locked --release --manifest-path src/rust/Cargo.toml --target-dir target \
-                -p whisper-dictate-app --no-default-features --features shipping --bin wd
-              bash scripts/integration/audio-capture-smoke.sh "$PWD/target/release/wd"
-            '
+            bash scripts/integration/audio-capture-smoke.sh /workspace/target/release/wd
       - name: whisper-load regression test (self-test)
-        # Item 5 prereq 5 (Whisper cold-load latency + OOM). The self-test
-        # loads a GGML model through the same background preloader the
-        # supervisor will use in Phase C step 2, catching any regression
-        # in the whisper-rs API surface, the whisper.cpp OOM behaviour,
-        # or the preloader wiring BEFORE it ships to users. Downloads
-        # tiny.en (~78 MB) into the runner-scoped cache first — we
-        # deliberately don't bake the model into the CI image (see
-        # docker/ci-ubuntu2604/README for the "no models baked in"
-        # rationale).
-        #
-        # continue-on-error: the HuggingFace fetch can flake in CI
-        # (rate-limits, transient 5xx) — the ubuntu-2604 job is still
-        # informational until model download reliability is proven; a
-        # failing tiny.en fetch shouldn't red-X the whole matrix leg.
-        # Promote to a hard failure (remove the flag) once model download
-        # has ≥50 consecutive green runs.
+        # The model is not baked into the image; the fetch can fail transiently.
         if: env.RUN_INTEG == 'true'
         continue-on-error: true
         run: |
           docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "$IMAGE" \
-            bash -c "cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --no-default-features --features shipping -- models download tiny.en && cargo run --release --manifest-path src/rust/Cargo.toml --target-dir target -p whisper-dictate-app --no-default-features --features shipping -- self-test whisper-load --model tiny.en --json"
+            bash -ec '
+              target/release/wd models download tiny.en
+              target/release/wd self-test whisper-load --model tiny.en --json
+            '
