@@ -488,3 +488,7 @@ pub enum UtteranceOutcome {
         result: TranscribeResult,
     },
 }
+
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;
