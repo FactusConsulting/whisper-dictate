@@ -1,5 +1,9 @@
 # Microphone & audio diagnostics
 
+In **Live dictation**, hold the push-to-talk shortcut to see the microphone's
+input level. If you use toggle mode, start recording to see the
+level. The bars stay dark in **Ready** because the app has closed the microphone.
+
 The **Runtime** log shows microphone quality on each measured dictation, next to
 the transcript. If the recording was measured but produced no text, its card
 shows the microphone assessment separately from the failure reason. The

@@ -17,6 +17,7 @@ mod hviske;
 mod log_card;
 #[cfg(test)]
 mod log_card_tests;
+mod mic_meter;
 mod output;
 #[cfg(test)]
 #[path = "output_tests.rs"]
@@ -78,14 +79,9 @@ pub(in crate::ui) use api_check_indicator::render_api_check_indicator;
 #[cfg(test)]
 pub(in crate::ui) use log_card::drag_overshoot_delta;
 pub(in crate::ui) use log_card::{drag_autoscroll, empty_log_state, metric_box, runtime_log_card};
-// The live mic gauge, runtime-state colour, pipeline-progress accent, and the
-// mic-label/audio-summary helpers are shared between the full runtime tab
-// top status bar and the compact strip (`compact.rs`).
 pub(in crate::ui) use pipeline_progress::pipeline_progress_accent_color;
-pub(in crate::ui) use runtime::level_gauge;
-pub(in crate::ui) use runtime_format::{
-    audio_device_label, full_audio_device_label, live_audio_level_summary,
-};
+#[cfg(test)]
+pub(in crate::ui) use runtime_format::{audio_device_label, live_audio_level_summary};
 pub(in crate::ui) use shell_indicator::recording_indicator_style;
 // Pure top-status-bar layout + post-indicator helpers live in their own module
 // (`top_status_layout.rs`) so the render code in `shell.rs` stays small. The

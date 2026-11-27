@@ -7,6 +7,7 @@
 //! running across the switch, so `update()` runs the runtime/background polls
 //! before it branches into the compact layout.
 
+use super::mic_meter::MIC_GAUGE_MIN_WIDTH;
 use super::status_surface::{compact_status_color, compact_status_label, compact_status_state};
 use super::*;
 use egui_material_icons::icons;
@@ -25,9 +26,7 @@ pub(in crate::ui) const FULL_MIN_INNER_SIZE: [f32; 2] = [1000.0, 640.0];
 
 const COMPACT_STATUS_WIDTH: f32 = 128.0;
 
-/// Width budget for the mic level gauge + device label inside the compact strip.
-const COMPACT_MIC_WIDTH: f32 = 150.0;
-/// Minimum characters of the active device name to keep legible even when the
+/// Minimum characters of the device name to keep legible even when the
 /// compact strip is dragged to its narrowest. Above this the budget grows with
 /// the actually-available label width so widening the window reveals the full
 /// device name.
@@ -157,16 +156,9 @@ impl WhisperDictateApp {
         }
     }
 
-    /// Mic level gauge + a short status/device label, reusing the same
-    /// `level_gauge` widget as the full runtime tab.
+    /// Use the Live meter without duplicating the Compact status label.
     fn compact_mic(&self, ui: &mut egui::Ui, palette: UiPalette) {
-        let active = self.audio_capture_active && self.runtime_state == RuntimeState::Running;
-        if active {
-            ui.ctx()
-                .request_repaint_after(std::time::Duration::from_millis(80));
-        }
-        let level = audio_meter_level(self.audio_meter_level, self.runtime_state, active);
-        let gauge_width = (COMPACT_MIC_WIDTH * 0.5).clamp(70.0, 100.0);
+        let gauge_width = MIC_GAUGE_MIN_WIDTH;
         ui.spacing_mut().item_spacing.x = 6.0;
         // The device label fills whatever space remains on the row after the
         // gauge and the right-pinned exit button, minus the inter-item gaps. So
@@ -176,21 +168,13 @@ impl WhisperDictateApp {
         let label_width =
             (ui.available_width() - gauge_width - exit_button_width - COMPACT_STATUS_WIDTH - 26.0)
                 .max(0.0);
-        let device_chars = compact_mic_label_char_budget(label_width);
-        level_gauge(ui, palette, level, active, gauge_width).on_hover_text(format!(
-            "Audio input: {}\nLive: {}",
-            full_audio_device_label(&self.active_audio_device),
-            live_audio_level_summary(self.audio_meter_raw_dbfs, self.audio_meter_peak, active),
-        ));
-        let device = audio_device_label(&self.active_audio_device, device_chars);
-        ui.label(
-            icon_text(icons::ICON_MIC.codepoint, device)
-                .size(12.0)
-                .color(if active {
-                    palette.accent_blue
-                } else {
-                    palette.text_muted
-                }),
+        self.mic_meter(
+            ui,
+            palette,
+            gauge_width,
+            label_width,
+            compact_mic_label_char_budget(label_width),
+            false,
         );
     }
 

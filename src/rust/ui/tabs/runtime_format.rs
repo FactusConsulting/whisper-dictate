@@ -29,14 +29,15 @@ pub(in crate::ui) fn live_audio_level_summary(
     raw_dbfs: Option<f32>,
     peak: Option<f32>,
     active: bool,
+    language: &str,
 ) -> String {
     if !active {
-        return "Not recording".to_owned();
+        return ui_text(language, UiTextKey::MicMeterInactive).to_owned();
     }
     match (raw_dbfs, peak) {
         (Some(raw_dbfs), Some(peak)) => format!("raw={raw_dbfs:.1}dBFS  peak={peak:.3}"),
         (Some(raw_dbfs), None) => format!("raw={raw_dbfs:.1}dBFS"),
-        _ => "Waiting for audio level".to_owned(),
+        _ => ui_text(language, UiTextKey::MicLevelPending).to_owned(),
     }
 }
 
@@ -45,20 +46,7 @@ pub(in crate::ui) fn mic_label_char_budget(width: f32) -> usize {
 }
 
 pub(in crate::ui) fn audio_device_label(value: &str, max_chars: usize) -> String {
-    let value = value.trim();
-    if value.is_empty() {
-        return "Input pending".to_owned();
-    }
-    compact_label(value, max_chars.clamp(8, 34))
-}
-
-pub(in crate::ui) fn full_audio_device_label(value: &str) -> &str {
-    let value = value.trim();
-    if value.is_empty() {
-        "Not reported yet"
-    } else {
-        value
-    }
+    compact_label(value.trim(), max_chars.clamp(8, 34))
 }
 
 pub(in crate::ui) fn empty_as_auto(value: &str) -> &str {

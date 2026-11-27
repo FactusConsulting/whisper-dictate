@@ -6,6 +6,7 @@
 //! * [`RecordingCapture::open_for_recording`] opens the configured input (or
 //!   the OS default for this recording when it fails) and spawns a forwarder
 //!   thread that feeds every delivered frame into the session.
+//!   The forwarder also samples the raw frames for the live input meter.
 //! * [`RecordingCapture::close_for_recording`] closes the stream and joins the
 //!   forwarder so the release tail reaches the session before transcription.
 //! * A device error or reaching `max_record_s` closes the stream at once, so
@@ -30,16 +31,18 @@ use super::capture_open_policy::{
     has_named_device, open_with_fallback, probe_startup_device, OpenBreaker, OpenTarget,
     StartupDevice,
 };
-use super::capture_status::{CaptureReporter, LOG_PREFIX, SYSTEM_DEFAULT_LABEL};
+use super::capture_status::{AudioMeterReading, CaptureReporter, LOG_PREFIX, SYSTEM_DEFAULT_LABEL};
 use super::recording_capture::RecordingCapture;
 use super::supervisor::CaptureStop;
-use crate::audio::PipelineReceiver;
+use crate::audio::{PipelineEvent, PipelineReceiver};
 use crate::dictate::session::audio_loss::RecordingAudioLoss;
 
 /// Opens slower than this are surfaced on the runtime channel because the
 /// start of speech may have been missed (Bluetooth profile switches can
 /// take around a second).
 pub(crate) const SLOW_OPEN_WARNING: Duration = Duration::from_millis(300);
+
+const AUDIO_METER_INTERVAL: Duration = Duration::from_millis(80);
 
 const HEALTH_OK: u8 = 0;
 const HEALTH_FALLBACK: u8 = 1;
@@ -70,6 +73,8 @@ pub(crate) trait CaptureOpener: Send + Sync + 'static {
 struct Slot<S> {
     stream: Option<S>,
     stopped: bool,
+    /// Open succeeded and its device status (if any) is already queued.
+    claimed: bool,
 }
 
 pub(crate) struct CaptureLifecycle<O: CaptureOpener, F: FrameSink> {
@@ -107,6 +112,7 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
             slot: Arc::new(Mutex::new(Slot {
                 stream: None,
                 stopped: false,
+                claimed: false,
             })),
             forwarder: Mutex::new(None),
             breaker: Mutex::new(OpenBreaker::default()),
@@ -215,7 +221,7 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
         let mut spawned = Some(spawned);
         let mut lost_to = None;
         {
-            let guard = lock(&self.slot);
+            let mut guard = lock(&self.slot);
             if guard.stopped {
                 lost_to = Some("runtime stop");
             } else if guard.stream.is_none() {
@@ -223,6 +229,7 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
             } else {
                 *forwarder = spawned.take();
                 self.report_opened(opened.target, opened.configured_error.as_deref(), elapsed);
+                guard.claimed = true;
             }
         }
         if let Some(reason) = lost_to {
@@ -261,10 +268,20 @@ impl<O: CaptureOpener, F: FrameSink> CaptureLifecycle<O, F> {
         let recording_loss = Arc::clone(&self.recording_loss);
         (self.spawn_thread)(Box::new(move || {
             let mut at_cap = None;
-            let report =
-                forward_frames_with_report_and_cap(|| rx.recv().ok(), frames.as_ref(), &mut || {
+            let mut next_meter_sample = Some(Instant::now());
+            let report = forward_frames_with_report_and_cap(
+                || {
+                    let event = rx.recv().ok()?;
+                    if let PipelineEvent::Frame(frame) = &event {
+                        meter_frame(&slot, &reporter, frame, &mut next_meter_sample);
+                    }
+                    Some(event)
+                },
+                frames.as_ref(),
+                &mut || {
                     at_cap.get_or_insert_with(|| rx.overflow_snapshot());
-                });
+                },
+            );
             // Latch inside the sink at the cap, before returning or cleaning
             // pending frames. Still-live producers and teardown can otherwise
             // overflow the abandoned queue after recording has already ended.
@@ -390,6 +407,36 @@ fn report_startup(reporter: &CaptureReporter, startup: &StartupDevice) -> u8 {
     }
 }
 
+/// Observe raw frames without copying them or locking the session. Only a
+/// sample due for publication needs the slot lock, which orders the send
+/// against closing or stopping the stream.
+fn meter_frame<S>(
+    slot: &Mutex<Slot<S>>,
+    reporter: &CaptureReporter,
+    frame: &[f32],
+    next_sample: &mut Option<Instant>,
+) {
+    let Some(due) = *next_sample else {
+        return;
+    };
+    if frame.is_empty() || Instant::now() < due {
+        return;
+    }
+    let slot = lock(slot);
+    if slot.stream.is_none() {
+        // The forwarder may still drain queued PCM after the stream closes.
+        *next_sample = None;
+        return;
+    }
+    if !slot.claimed {
+        return;
+    }
+    reporter.enqueue_audio_meter(Some(AudioMeterReading::measure(frame)));
+    *next_sample = Some(Instant::now() + AUDIO_METER_INTERVAL);
+    drop(slot);
+    reporter.notify_repaint();
+}
+
 /// After the forwarder ends early, close the device immediately so the OS
 /// microphone indicator goes off; the recording ends at the next release.
 fn finish_forwarding<S>(
@@ -401,11 +448,22 @@ fn finish_forwarding<S>(
     if end == ForwardEnd::Closed {
         return;
     }
-    let (stream, stopped) = {
+    let (stream, stopped, meter_closed) = {
         let mut guard = lock(slot);
-        (guard.stream.take(), guard.stopped)
+        let stream = guard.stream.take();
+        let meter_closed =
+            end == ForwardEnd::RecordingFull && stream.is_some() && guard.claimed && !guard.stopped;
+        if meter_closed {
+            // The recording status stays live until release, but the meter
+            // should not show a stale reading from a microphone now closed.
+            reporter.enqueue_audio_meter(None);
+        }
+        (stream, guard.stopped, meter_closed)
     };
     drop(stream);
+    if meter_closed {
+        reporter.notify_repaint();
+    }
     if stopped {
         return;
     }
@@ -440,6 +498,7 @@ fn install_stream<S>(slot: &Mutex<Slot<S>>, stream: S) -> bool {
         return false;
     }
     guard.stream = Some(stream);
+    guard.claimed = false;
     true
 }
 
