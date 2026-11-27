@@ -18,13 +18,28 @@ struct Adapter {
 
 impl Adapters {
     pub(crate) fn probe_for_model_load<T: AsRef<[GpuInfo]>>(query: impl FnOnce() -> T) -> Self {
-        let mut adapters = Self::probe();
-        if adapters.0.iter().any(|adapter| {
+        Self::probe().with_nvidia_free_limit(query)
+    }
+
+    pub(crate) fn with_nvidia_free_limit<T: AsRef<[GpuInfo]>>(
+        mut self,
+        query: impl FnOnce() -> T,
+    ) -> Self {
+        if self.0.iter().any(|adapter| {
             adapter.capacity.is_some() && adapter.description.to_bytes().starts_with(b"NVIDIA ")
         }) {
-            adapters.limit_nvidia_free_mib(query().as_ref());
+            self.limit_nvidia_free_mib(query().as_ref());
         }
-        adapters
+        self
+    }
+
+    #[cfg(all(test, feature = "nemotron-local", any(windows, target_os = "linux")))]
+    pub(crate) fn with_test_capacity(description: &CStr, total_mib: u32, free_mib: u32) -> Self {
+        Self(vec![Adapter {
+            description: description.into(),
+            pci_bus: None,
+            capacity: Some((total_mib, free_mib)),
+        }])
     }
 
     /// Vulkan's per-process budget can exceed currently unused physical VRAM.
@@ -315,7 +330,7 @@ mod tests {
     fn model_load_uses_available_physical_vram_when_vulkan_budget_is_higher() {
         let nvidia = c"NVIDIA RTX test";
         let other = c"Other adapter";
-        let mut adapters = Adapters(vec![
+        let adapters = Adapters(vec![
             Adapter {
                 description: nvidia.into(),
                 pci_bus: None,
@@ -334,13 +349,38 @@ mod tests {
             free_mb,
             source: "nvidia-smi",
         };
-        adapters.limit_nvidia_free_mib(&[
-            reported(1, nvidia, 1134),
-            reported(0, nvidia, 8000),
-            reported(2, c"Unmatched", 0),
-        ]);
+        let adapters = adapters.with_nvidia_free_limit(|| {
+            [
+                reported(1, nvidia, 1134),
+                reported(0, nvidia, 8000),
+                reported(2, c"Unmatched", 0),
+            ]
+        });
         assert_eq!(adapters.capacity(nvidia, None), Some((10240, 1134)));
         assert_eq!(adapters.capacity(other, None), Some((8192, 4096)));
+    }
+
+    #[test]
+    fn model_load_ignores_nvidia_diagnostics_without_a_supported_nvidia_adapter() {
+        let adapters = Adapters(vec![
+            Adapter {
+                description: c"NVIDIA without a supported memory query".into(),
+                pci_bus: None,
+                capacity: None,
+            },
+            Adapter {
+                description: c"Other adapter".into(),
+                pci_bus: None,
+                capacity: Some((8192, 4096)),
+            },
+        ])
+        .with_nvidia_free_limit(|| -> Vec<GpuInfo> {
+            panic!("no supported NVIDIA capacity to reconcile")
+        });
+        assert_eq!(
+            adapters.capacity(c"Other adapter", None),
+            Some((8192, 4096))
+        );
     }
 
     #[cfg(feature = "nemotron-local")]

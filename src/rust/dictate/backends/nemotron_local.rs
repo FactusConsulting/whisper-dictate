@@ -326,25 +326,49 @@ impl DeviceRequest {
 }
 
 pub(crate) fn gpu_memory(model: &str, device: &str) -> Result<(u32, Option<u32>)> {
+    gpu_memory_with(model, device, probe_free_mib)
+}
+
+fn gpu_memory_with(
+    model: &str,
+    device: &str,
+    probe: impl FnOnce(DeviceRequest, u32) -> Option<u32>,
+) -> Result<(u32, Option<u32>)> {
     let device = DeviceRequest::parse(device)?;
     let model = model.trim();
     let path = model_path_for_request(model)?;
     let required_mib = nemotron_required_mib(custom_model_size(model, &path)?);
-    Ok((required_mib, probe_free_mib(device, required_mib)))
+    Ok((required_mib, probe(device, required_mib)))
 }
 
 fn probe_free_mib(device: DeviceRequest, required_mib: u32) -> Option<u32> {
+    probe_free_mib_with(
+        device,
+        required_mib,
+        driver_enabled,
+        Adapters::probe,
+        query_gpus,
+    )
+}
+
+fn probe_free_mib_with(
+    device: DeviceRequest,
+    required_mib: u32,
+    enabled: impl Fn(Accelerator) -> bool,
+    probe_vulkan: impl Fn() -> Adapters,
+    query_nvidia: impl Fn() -> Vec<GpuInfo>,
+) -> Option<u32> {
     let nvidia = std::cell::OnceCell::new();
-    let query = || nvidia.get_or_init(query_gpus);
+    let query = || nvidia.get_or_init(&query_nvidia);
     device
         .candidates()
         .into_iter()
         .flatten()
-        .filter(|&accel| accel.available() && driver_enabled(accel))
+        .filter(|&accel| accel.available() && enabled(accel))
         .filter_map(|accel| match accel {
-            Accelerator::Vulkan => {
-                Adapters::probe_for_model_load(query).best_free_mib(required_mib)
-            }
+            Accelerator::Vulkan => probe_vulkan()
+                .with_nvidia_free_limit(query)
+                .best_free_mib(required_mib),
             Accelerator::Cuda => cuda_best_free_mib(query(), required_mib),
         })
         .max()
@@ -352,11 +376,19 @@ fn probe_free_mib(device: DeviceRequest, required_mib: u32) -> Option<u32> {
 
 #[cfg(native_session)]
 pub(crate) fn check_gpu_capacity(config: &NemotronLocalBackendConfig) -> Result<()> {
+    check_gpu_capacity_with(config, probe_free_mib)
+}
+
+#[cfg(any(native_session, test))]
+fn check_gpu_capacity_with(
+    config: &NemotronLocalBackendConfig,
+    probe: impl FnOnce(DeviceRequest, u32) -> Option<u32>,
+) -> Result<()> {
     let required_mib = nemotron_required_mib(custom_model_size(
         &config.model_request,
         &config.model_path,
     )?);
-    let free_mib = probe_free_mib(config.device, required_mib);
+    let free_mib = probe(config.device, required_mib);
     match free_mib {
         Some(free_mib) if free_mib >= required_mib => Ok(()),
         Some(free_mib) => Err(GpuMemoryShortfall { required_mib, free_mib }.into()),

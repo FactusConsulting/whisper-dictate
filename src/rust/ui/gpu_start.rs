@@ -132,7 +132,12 @@ impl GpuStartState {
         self.pending = None;
     }
 
-    fn sample(&mut self, ctx: &egui::Context, now: Instant) {
+    fn sample(
+        &mut self,
+        ctx: &egui::Context,
+        now: Instant,
+        check: impl FnOnce(&LocalGpuTarget) -> (LocalGpuCheck, Instant) + Send + 'static,
+    ) {
         self.complete_sample(now);
         // Do not reuse a readout from before a long idle/hidden interval.
         // During a routine refresh the last result remains visible.
@@ -150,8 +155,7 @@ impl GpuStartState {
                 let started = std::thread::Builder::new()
                     .name("gpu-start-check".into())
                     .spawn(move || {
-                        let result = target.check();
-                        let _ = sender.send((result, Instant::now()));
+                        let _ = sender.send(check(&target));
                         ctx.request_repaint();
                     });
                 if started.is_ok() {
@@ -328,7 +332,10 @@ impl WhisperDictateApp {
         if let Some(at) = self.gpu_start.refresh_at {
             ctx.request_repaint_after(at.saturating_duration_since(now));
         }
-        self.gpu_start.sample(ctx, now);
+        self.gpu_start.sample(ctx, now, |target| {
+            let result = target.check();
+            (result, Instant::now())
+        });
     }
 
     pub(super) fn gpu_start_status(&self) -> Option<GpuStartStatus> {

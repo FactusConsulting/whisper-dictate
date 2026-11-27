@@ -51,33 +51,163 @@ fn measured(app: &mut WhisperDictateApp, check: LocalGpuCheck) {
     app.gpu_start.complete_sample(now);
 }
 
+fn finish_sample(app: &mut WhisperDictateApp, mut poll: impl FnMut(&mut WhisperDictateApp)) {
+    assert!(app.gpu_start.pending.is_some(), "sample was not scheduled");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        poll(app);
+        if app.gpu_start.pending.is_none() {
+            return;
+        }
+        assert!(Instant::now() < deadline, "GPU sample did not finish");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+fn no_sample(_: &LocalGpuTarget) -> (LocalGpuCheck, Instant) {
+    panic!("GPU sample was not due");
+}
+
+fn capacity(free_mib: u32) -> LocalGpuCheck {
+    LocalGpuCheck::Capacity {
+        required_mib: 4096,
+        free_mib: Some(free_mib),
+    }
+}
+
 #[test]
-fn low_memory_is_visible_before_start_and_recovery_enables_start() {
+fn asynchronous_refresh_keeps_last_budget_until_recovery() {
     let mut app = app();
+    let ctx = egui::Context::default();
+    let now = Instant::now();
     app.gpu_start
         .set_selection(Selection::Target(LocalGpuTarget::Whisper(4096)));
+    let (finish, result) = mpsc::channel();
+    app.gpu_start.sample(&ctx, now, move |target| {
+        assert_eq!(*target, LocalGpuTarget::Whisper(4096));
+        (result.recv().unwrap(), now)
+    });
+    app.gpu_start.sample(&ctx, now, no_sample);
     assert_readout(&mut app, "Checking free GPU memory");
     assert!(!start_enabled(&app));
 
-    measured(
-        &mut app,
-        LocalGpuCheck::Capacity {
-            required_mib: 4096,
-            free_mib: Some(512),
-        },
-    );
+    finish.send(capacity(512)).unwrap();
+    finish_sample(&mut app, |app| app.gpu_start.sample(&ctx, now, no_sample));
     assert_readout(&mut app, "512/4096 MiB");
     assert_readout(&mut app, "too low");
     assert!(!start_enabled(&app));
 
-    measured(
-        &mut app,
-        LocalGpuCheck::Capacity {
-            required_mib: 4096,
-            free_mib: Some(4096),
-        },
+    let due = now + REFRESH_INTERVAL;
+    app.gpu_start
+        .sample(&ctx, due - Duration::from_millis(1), no_sample);
+    assert!(app.gpu_start.pending.is_none());
+    app.gpu_start
+        .sample(&ctx, due, move |_| (capacity(4096), due));
+
+    app.settings.ui_language = "da".to_owned();
+    assert_readout(&mut app, "512/4096 MiB (ledig/krævet) · for lidt");
+    assert!(!start_enabled(&app));
+    finish_sample(&mut app, |app| app.gpu_start.sample(&ctx, due, no_sample));
+    assert_readout(&mut app, "4096/4096 MiB (ledig/krævet) · klar");
+    assert!(start_enabled(&app));
+    app.settings.ui_language = "en".to_owned();
+    assert_readout(&mut app, "4096/4096 MiB (free/needed) · ready");
+}
+
+#[test]
+fn stale_budget_after_idle_blocks_start_until_resampled() {
+    let mut app = app();
+    let ctx = egui::Context::default();
+    let now = Instant::now();
+    app.gpu_start
+        .set_selection(Selection::Target(LocalGpuTarget::Whisper(4096)));
+    app.gpu_start
+        .sample(&ctx, now, move |_| (capacity(8192), now));
+    // A visible poll can consume the sample later than the worker measured it.
+    let first_readout = now + REFRESH_INTERVAL / 2;
+    finish_sample(&mut app, |app| {
+        app.gpu_start.sample(&ctx, first_readout, no_sample);
+    });
+    assert!(start_enabled(&app));
+
+    // No visible polls for two intervals: the old readout must not survive.
+    let resumed = now + 2 * REFRESH_INTERVAL;
+    app.gpu_start
+        .sample(&ctx, resumed, move |_| (capacity(512), resumed));
+    app.settings.ui_language = "da".to_owned();
+    assert_readout(&mut app, "Kontrollerer ledig GPU-hukommelse");
+    assert!(!start_enabled(&app));
+    finish_sample(&mut app, |app| {
+        app.gpu_start.sample(&ctx, resumed, no_sample);
+    });
+    assert_readout(&mut app, "512/4096 MiB");
+    assert!(!start_enabled(&app));
+}
+
+#[test]
+fn app_poll_suspends_while_running_and_discards_a_probe_after_saved_route_changes() {
+    let _lock = crate::test_env_lock::lock_env();
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.json");
+    let missing = dir.path().join("missing.bin");
+    let _config = EnvVarGuard::set("VOICEPI_CONFIG", &config.to_string_lossy());
+    let _path = EnvVarGuard::set(
+        crate::ui::app::WHISPER_MODEL_PATH_ENV,
+        &missing.to_string_lossy(),
     );
-    assert_readout(&mut app, "4096/4096 MiB");
+    let _gpu = EnvVarGuard::set(crate::whisper::GPU_ENV, "auto");
+    std::fs::write(&config, r#"{"stt_backend":"whisper","device":"auto"}"#).unwrap();
+
+    let mut app = app();
+    let ctx = egui::Context::default();
+    assert!(
+        effective_selection(&app.saved_worker_base_command().runtime)
+            == Selection::Target(LocalGpuTarget::WhisperFile(missing))
+    );
+    app.gpu_start.manual = false;
+    app.poll_gpu_start(&ctx);
+    assert!(matches!(
+        app.gpu_start_status(),
+        Some(GpuStartStatus::Checking)
+    ));
+    assert!(!start_enabled(&app));
+    finish_sample(&mut app, |app| app.poll_gpu_start(&ctx));
+    assert_eq!(app.gpu_start.result, Some(LocalGpuCheck::Unavailable));
+    app.gpu_start.manual = true;
+    app.settings.ui_language = "da".to_owned();
+    assert_readout(&mut app, "Ukendt GPU-hukommelse");
+    assert!(start_enabled(&app));
+
+    app.runtime_state = RuntimeState::Running;
+    assert!(app.gpu_start_status().is_none());
+    assert!(painted_texts_at(&mut app, egui::vec2(460.0, 210.0))
+        .iter()
+        .all(|label| !label.text.contains("Ukendt GPU-hukommelse")));
+    assert!(!start_enabled(&app));
+    app.gpu_start.manual = false;
+    app.poll_gpu_start(&ctx);
+    assert!(app.gpu_start.result.is_none());
+    assert!(app.gpu_start.pending.is_none());
+    assert!(app.gpu_start.refresh_at.is_none());
+
+    app.runtime_state = RuntimeState::Stopped;
+    app.poll_gpu_start(&ctx);
+    assert!(app.gpu_start.pending.is_some());
+    assert!(matches!(
+        app.gpu_start_status(),
+        Some(GpuStartStatus::Checking)
+    ));
+
+    std::fs::write(
+        &config,
+        r#"{"stt_backend":"openai","stt_provider":"openai","stt_model":"whisper-1"}"#,
+    )
+    .unwrap();
+    app.gpu_start.refresh_selection();
+    assert!(app.gpu_start.refresh_at.is_none());
+    finish_sample(&mut app, |app| app.poll_gpu_start(&ctx));
+    assert!(app.gpu_start.result.is_none());
+    assert!(app.gpu_start_status().is_none());
     assert!(start_enabled(&app));
 }
 

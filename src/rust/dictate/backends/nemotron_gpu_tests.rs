@@ -1,11 +1,12 @@
 use std::sync::atomic::Ordering;
 
 use crate::dictate::TranscribeBackend;
+use crate::model_capacity::GpuMemoryShortfall;
 
 use super::{
-    active_runtime, driver_enabled_with, load_recognizer_with, max_local_gpu_total_mib,
-    Accelerator, DeviceRequest, GpuCapacity, GpuInfo, NemotronLocalBackendConfig,
-    NemotronLocalTranscribeBackend, TranscriptionGuards,
+    active_runtime, check_gpu_capacity_with, driver_enabled_with, load_recognizer_with,
+    max_local_gpu_total_mib, Accelerator, DeviceRequest, GpuCapacity, GpuInfo,
+    NemotronLocalBackendConfig, NemotronLocalTranscribeBackend, TranscriptionGuards,
 };
 
 fn custom_model_config(device: DeviceRequest) -> (tempfile::TempDir, NemotronLocalBackendConfig) {
@@ -88,6 +89,89 @@ fn explicit_cuda_has_no_other_candidate() {
     assert_eq!(device.candidates(), [Some(Accelerator::Cuda), None]);
 }
 
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn style_capacity_sizes_the_real_file_and_shares_one_nvidia_snapshot() {
+    use std::cell::Cell;
+
+    use crate::model_capacity::vulkan::Adapters;
+
+    use super::{gpu_memory_with, probe_free_mib_with};
+
+    let (_directory, config) = custom_model_config(DeviceRequest::Auto);
+    // At 683 MiB the custom file crosses the 2048 MiB official-model floor.
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&config.model_path)
+        .unwrap()
+        .set_len(683 * (1 << 20))
+        .unwrap();
+    let model = format!("  {}  ", config.model_request);
+    let cuda_available = Accelerator::Cuda.available();
+    let mut cases = vec![
+        ("vulkan", true, 1300, 1300),
+        ("vulkan", true, 2500, 1800),
+        ("auto", false, 1300, 1300),
+        ("auto", true, 1300, if cuda_available { 1800 } else { 1300 }),
+    ];
+    if cuda_available {
+        cases.push(("cuda", true, 1300, 1800));
+    }
+    for (device, allow_cuda, vulkan_free, expected_free) in cases {
+        let queried = Cell::new(false);
+        let vulkan_probed = Cell::new(false);
+        let result = gpu_memory_with(&model, device, |device_request, required_mib| {
+            probe_free_mib_with(
+                device_request,
+                required_mib,
+                |accel| accel != Accelerator::Cuda || allow_cuda,
+                || {
+                    assert_ne!(device, "cuda", "explicit CUDA must not probe Vulkan");
+                    assert!(!vulkan_probed.replace(true));
+                    Adapters::with_test_capacity(c"NVIDIA test adapter", 8192, vulkan_free)
+                },
+                || {
+                    assert!(!queried.replace(true), "one snapshot per capacity check");
+                    let mut matching = fake_gpu(8192, 1800);
+                    matching.name = "NVIDIA test adapter".to_owned();
+                    vec![matching, fake_gpu(8192, 1600), fake_gpu(2048, 2048)]
+                },
+            )
+        })
+        .expect("an existing custom model should have a capacity plan");
+        assert_eq!(result, (2049, Some(expected_free)), "{device}");
+        assert!(queried.get(), "{device}");
+        assert_eq!(vulkan_probed.get(), device != "cuda");
+    }
+}
+
+#[test]
+fn startup_preflight_reports_typed_shortfall_only_for_an_eligible_adapter() {
+    let (_directory, config) = custom_model_config(DeviceRequest::Auto);
+    let check = |free| {
+        check_gpu_capacity_with(&config, |device, required_mib| {
+            assert_eq!(device, DeviceRequest::Auto);
+            assert_eq!(required_mib, 2048);
+            free
+        })
+    };
+
+    let error = check(Some(2047)).expect_err("free memory is one MiB short");
+    assert_eq!(
+        error.downcast_ref::<GpuMemoryShortfall>(),
+        Some(&GpuMemoryShortfall {
+            required_mib: 2048,
+            free_mib: 2047,
+        })
+    );
+    assert!(check(Some(2048)).is_ok());
+    let error = check(None).expect_err("no adapter has sufficient total memory");
+    assert!(error.downcast_ref::<GpuMemoryShortfall>().is_none());
+    assert!(error
+        .to_string()
+        .contains("supported GPU with at least 2048 MiB"));
+}
+
 #[test]
 fn stopped_runtime_refuses_eager_and_lazy_load_without_leaving_a_resident_model() {
     use crate::audio_dsp::FRAME_SAMPLES;
@@ -143,7 +227,7 @@ fn no_ready_gpu_refuses_to_open_a_runtime_or_create_a_recognizer() {
     .expect_err("a busy or disabled GPU cannot admit a local model");
     let expected = if Accelerator::Vulkan.available() {
         let shortfall = error
-            .downcast_ref::<crate::model_capacity::GpuMemoryShortfall>()
+            .downcast_ref::<GpuMemoryShortfall>()
             .expect("a usable but busy GPU must report the shortfall");
         assert_eq!((shortfall.required_mib, shortfall.free_mib), (2048, 2047));
         &[Accelerator::Vulkan][..]
@@ -152,6 +236,65 @@ fn no_ready_gpu_refuses_to_open_a_runtime_or_create_a_recognizer() {
         &[]
     };
     assert_eq!(probes, expected);
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn adapter_below_total_requirement_does_not_load_a_runtime_or_report_a_shortfall() {
+    use crate::model_capacity::vulkan::Adapters;
+
+    let (_directory, config) = custom_model_config(DeviceRequest::Explicit(Accelerator::Vulkan));
+    let error = load_recognizer_with::<(), ()>(
+        &config,
+        |_| true,
+        |_| GpuCapacity::Vulkan(Adapters::with_test_capacity(c"small adapter", 2047, 2047)),
+        |_| panic!("the adapter cannot fit the model even when completely idle"),
+        |_, _, _| panic!("no runtime was loaded"),
+        |_, _, _| panic!("no suitable GPU was found"),
+    )
+    .expect_err("the adapter total is too small");
+    assert!(error.downcast_ref::<GpuMemoryShortfall>().is_none());
+    assert!(error.to_string().contains("verified GPU runtime"));
+}
+
+#[cfg(any(windows, target_os = "linux"))]
+#[test]
+fn recognizer_creation_reports_a_typed_shortfall_if_free_vram_drops_after_preflight() {
+    use crate::model_capacity::vulkan::Adapters;
+
+    let (_directory, config) = custom_model_config(DeviceRequest::Explicit(Accelerator::Vulkan));
+    let description = c"NVIDIA test adapter";
+    let mut probe_count = 0;
+    let selected = std::cell::Cell::new(false);
+    let error = load_recognizer_with::<_, ()>(
+        &config,
+        |_| true,
+        |accelerator| {
+            assert_eq!(accelerator, Accelerator::Vulkan);
+            probe_count += 1;
+            let free = if selected.get() { 2047 } else { 2048 };
+            GpuCapacity::Vulkan(Adapters::with_test_capacity(description, 8192, free))
+        },
+        Ok,
+        |accelerator, required_mib, capacity| {
+            assert_eq!(*accelerator, Accelerator::Vulkan);
+            assert_eq!(required_mib, 2048);
+            assert_eq!(capacity.capacity(description), Some((8192, 2048)));
+            assert!(!selected.replace(true));
+            Ok(0)
+        },
+        |_, _, _| panic!("the refreshed budget cannot admit the recognizer"),
+    )
+    .expect_err("the GPU became busy before recognizer creation");
+    assert_eq!(probe_count, 2);
+    assert!(selected.get());
+    assert_eq!(
+        error.downcast_ref::<GpuMemoryShortfall>(),
+        Some(&GpuMemoryShortfall {
+            required_mib: 2048,
+            free_mib: 2047,
+        })
+    );
 }
 
 #[cfg(any(windows, all(target_os = "linux", target_arch = "x86_64")))]
