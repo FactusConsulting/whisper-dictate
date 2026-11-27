@@ -5,7 +5,7 @@ input level. If you use toggle mode, start recording to see the
 level. The bars stay dark in **Ready** because the app has closed the microphone.
 
 Linux can list software-routed audio inputs as well as hardware microphones.
-The ALSA `null` source generates silence, so it is not offered as a microphone
+The `null` source generates silence, so it is not offered as a microphone
 or used as the default. A source named `Monitor of …` carries playback from
 an output device, not speech from a microphone.
 
