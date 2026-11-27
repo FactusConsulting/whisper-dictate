@@ -4,6 +4,11 @@ In **Live dictation**, hold the push-to-talk shortcut to see the microphone's
 input level. If you use toggle mode, start recording to see the
 level. The bars stay dark in **Ready** because the app has closed the microphone.
 
+Linux can list software-routed audio inputs as well as hardware microphones.
+The ALSA `null` source generates silence, so it is not offered as a microphone
+or used as the default. A source named `Monitor of …` carries playback from
+an output device, not speech from a microphone.
+
 The **Runtime** log shows microphone quality on each measured dictation, next to
 the transcript. If the recording was measured but produced no text, its card
 shows the microphone assessment separately from the failure reason. The

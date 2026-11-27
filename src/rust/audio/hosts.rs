@@ -295,43 +295,21 @@ pub fn resolve_input(selector: &str) -> Result<ResolvedInput, anyhow::Error> {
     }
 }
 
-/// Pure predicate for the empty-selector fallback: a device the capture
-/// gate can open is a candidate EXCEPT the ALSA `null` PCM — it opens
-/// and yields configs but discards everything recorded, so using it as
-/// the fallback "default mic" would route dictation into silence.
-fn fallback_candidate(name: &str, usable: bool) -> bool {
-    usable && !is_null_pcm(name)
-}
-
-/// Pick the fallback device for the empty selector: the first device the
-/// capture gate can open, preferring anything real over the ALSA `null`
-/// PCM. The null opens and yields configs but discards everything
-/// recorded, so it loses to every real candidate; when nothing real is
-/// usable (headless CI runners enumerate only the null and an unopenable
-/// "default"), accepting it keeps the capture pipeline exercisable
-/// instead of reporting an outage — the null yields the sample flow the
-/// audio-capture self-test gate accepts. None means the resolver must
-/// report the empty-selector outage.
+/// Fall back to a usable enumerated input, never to ALSA's silent `null` PCM.
+/// A diagnostic can still request `null` explicitly.
 fn pick_empty_selector_index(names: &[String], usable: &[bool]) -> Option<usize> {
     names
         .iter()
         .zip(usable.iter())
-        .position(|(name, &usable)| fallback_candidate(name, usable))
-        .or_else(|| {
-            names
-                .iter()
-                .zip(usable.iter())
-                .position(|(name, &usable)| usable && is_null_pcm(name))
-        })
+        .position(|(name, &usable)| usable && !is_null_pcm(name))
 }
 
-/// Pure predicate: does this cpal device name identify the ALSA `null`
-/// PCM? cpal's ALSA `Display` prints the device's ALSA description, so
-/// the builtin null PCM shows up as "Discard all samples (playback) or
-/// generate zero samples (capture)" rather than as `null`; match both
-/// spellings.
-fn is_null_pcm(name: &str) -> bool {
-    name.eq_ignore_ascii_case("null") || name.starts_with("Discard all samples")
+/// The ALSA null PCM can open but synthesizes silence. Its published name
+/// is either the short PCM ID or the description with an ID suffix.
+pub(crate) fn is_null_pcm(name: &str) -> bool {
+    name.eq_ignore_ascii_case("null")
+        || name.ends_with(" [null]")
+        || name.starts_with("Discard all samples")
 }
 
 /// Pure predicate behind [`device_publish_name`]: the display label gets

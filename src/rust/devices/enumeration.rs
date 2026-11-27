@@ -171,6 +171,10 @@ pub(crate) fn append_host_devices(
             // sentinel, so we drop them just like select_input_devices does.
             continue;
         }
+        #[cfg(target_os = "linux")]
+        if host.id() == cpal::HostId::Alsa && crate::audio::hosts::is_null_pcm(&name) {
+            continue;
+        }
         // De-duplicate across hosts BY NAME. On Windows the default host
         // (WASAPI) already collapses host-API duplication, but cross-host
         // enumeration can re-introduce the same physical mic (e.g. ALSA
