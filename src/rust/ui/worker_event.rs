@@ -3,6 +3,15 @@
 
 use crate::runtime::{RuntimeState, WorkerEvent};
 
+const AUDIO_INPUT_METRIC_KEYS: [&str; 6] = [
+    "audio_raw_dbfs",
+    "audio_peak",
+    "audio_noise_dbfs",
+    "audio_snr_db",
+    "audio_gain",
+    "audio_input_status",
+];
+
 pub(in crate::ui) fn worker_status_log_line(event: &WorkerEvent) -> Option<String> {
     if event.event != "status" {
         return None;
@@ -21,9 +30,32 @@ pub(in crate::ui) fn worker_status_log_line(event: &WorkerEvent) -> Option<Strin
         "first_audio",
         "recording_s",
         "reason",
-        "error",
-        "text_preview",
-    ] {
+    ]
+    .into_iter()
+    .chain(
+        (state == "no_text")
+            .then_some(AUDIO_INPUT_METRIC_KEYS)
+            .into_iter()
+            .flatten(),
+    )
+    .chain(["error", "text_preview"])
+    {
+        if AUDIO_INPUT_METRIC_KEYS.contains(&key) {
+            // Keep only scalar numbers and single-token statuses. Do not let a
+            // malformed value become a second field in the status log.
+            let valid = match event.payload.get(key) {
+                Some(value) if key == "audio_input_status" => {
+                    value.as_str().is_some_and(|status| {
+                        !status.is_empty() && !status.chars().any(char::is_whitespace)
+                    })
+                }
+                Some(value) => value.is_number(),
+                None => false,
+            };
+            if !valid {
+                continue;
+            }
+        }
         if let Some(value) = worker_event_string(&event.payload, key) {
             line.push(' ');
             line.push_str(key);

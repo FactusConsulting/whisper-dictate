@@ -245,9 +245,14 @@ impl WhisperDictateApp {
                 "HealthPoor" => health_poor_badge.as_str(),
                 _ => card.badge.as_str(),
             };
-            if let Some(text) =
-                runtime_log_card(ui, card, badge, palette, Some((copy_enabled, copy_hover)))
-            {
+            if let Some(text) = runtime_log_card(
+                ui,
+                card,
+                badge,
+                palette,
+                Some((copy_enabled, copy_hover)),
+                lang,
+            ) {
                 crate::injection::cancel_ui_clipboard_restore();
                 ui.ctx().copy_text(text.to_owned());
             }

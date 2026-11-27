@@ -144,7 +144,15 @@ fn prepare_boosts_quiet_passing_audio_and_times_the_trimmed_slice() {
     let total = pcm.len();
 
     match prepare_for_transcription(&pcm, 16_000, &StatusThresholds::default()) {
-        PreparedAudio::Decode { audio, duration_s } => {
+        PreparedAudio::Decode {
+            audio,
+            duration_s,
+            metrics,
+        } => {
+            let thresholds = StatusThresholds::default();
+            assert_eq!(metrics, capture_metrics(&pcm[..audio.len()], &thresholds));
+            assert_eq!(metrics.peak, f64::from(body_peak));
+            assert!(metrics.gain > 1.5);
             assert!(
                 audio.len() < total,
                 "the dead tail must be trimmed from the decoded audio ({} vs {total})",
@@ -156,6 +164,7 @@ fn prepare_boosts_quiet_passing_audio_and_times_the_trimmed_slice() {
                 "duration must reflect the trimmed length, got {duration_s}"
             );
             let out_peak = audio.iter().copied().fold(0.0_f32, |m, v| m.max(v.abs()));
+            assert_eq!(out_peak, body_peak * metrics.gain as f32);
             assert!(
                 out_peak > body_peak * 1.5,
                 "quiet audio must be boosted toward target: out_peak={out_peak} body_peak={body_peak}"

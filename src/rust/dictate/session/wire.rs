@@ -49,9 +49,7 @@ pub(super) fn emit_status_with_output<W: Write>(
     extras: &[(&str, Value)],
     output: crate::dictate::events::WorkerEventOutput,
 ) -> Result<(), SessionError> {
-    let mut payload: Map<String, Value> = Map::new();
-    payload.insert("event".into(), Value::from("status"));
-    payload.insert("state".into(), Value::from(state));
+    let mut payload = status_payload(state);
     for (key, value) in extras.iter() {
         if is_droppable(value) {
             continue;
@@ -59,6 +57,53 @@ pub(super) fn emit_status_with_output<W: Write>(
         payload.insert((*key).to_string(), value.clone());
     }
     write_line(writer, &Value::Object(payload), output)
+}
+
+fn status_payload(state: &str) -> Map<String, Value> {
+    let mut payload = Map::new();
+    payload.insert("event".into(), Value::from("status"));
+    payload.insert("state".into(), Value::from(state));
+    payload
+}
+
+pub(super) fn emit_no_text_with_output<W: Write>(
+    writer: &mut W,
+    reason: &str,
+    recording_s: Value,
+    error: Option<&str>,
+    metrics: Option<&crate::audio_dsp::AudioCaptureMetrics>,
+    output: crate::dictate::events::WorkerEventOutput,
+) -> Result<(), SessionError> {
+    let mut payload = status_payload("no_text");
+    payload.insert("reason".into(), Value::from(reason));
+    payload.insert("recording_s".into(), recording_s);
+    if let Some(error) = error {
+        payload.insert("error".into(), Value::from(error));
+    }
+    insert_audio_metrics(&mut payload, metrics);
+    write_line(writer, &Value::Object(payload), output)
+}
+
+fn insert_audio_metrics(
+    payload: &mut Map<String, Value>,
+    metrics: Option<&crate::audio_dsp::AudioCaptureMetrics>,
+) {
+    let Some(metrics) = metrics else { return };
+    for (key, value) in [
+        ("audio_raw_dbfs", metrics.raw_dbfs),
+        ("audio_peak", metrics.peak),
+        ("audio_noise_dbfs", metrics.noise_dbfs),
+        ("audio_snr_db", metrics.snr_db),
+        ("audio_gain", metrics.gain),
+    ] {
+        if value.is_finite() {
+            payload.insert(key.into(), Value::from(value));
+        }
+    }
+    payload.insert(
+        "audio_input_status".into(),
+        Value::from(metrics.input_status),
+    );
 }
 
 /// Post-processing artifacts bundled with an `emit_utterance`
@@ -203,6 +248,7 @@ pub(super) fn build_utterance_payload(
     // Clip duration in seconds (rounded to 2 dp). Consumers like
     // `src/rust/ui/log_render.rs` + `src/rust/telemetry.rs` read it.
     payload.insert("recording_s".into(), recording_s);
+    insert_audio_metrics(&mut payload, result.audio_metrics.as_ref());
     if let Some(loss) = extras.audio_loss {
         for (key, count) in loss.fields() {
             payload.insert(key.into(), Value::from(count));

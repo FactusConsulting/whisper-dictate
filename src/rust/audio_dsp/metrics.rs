@@ -5,8 +5,7 @@
 use super::helpers::{frame_rms, nonzero_or_eps, peak_abs_f64, percentile, rms_f64};
 use super::StatusThresholds;
 
-/// Per-buffer mic-input snapshot — the five values
-/// `AudioCaptureMetrics` carries.
+/// Per-buffer mic-input measurements taken before applying normalization gain.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AudioCaptureMetrics {
     /// RMS loudness of the raw (pre-boost) buffer, in dBFS.
@@ -25,6 +24,8 @@ pub struct AudioCaptureMetrics {
     pub input_status: &'static str,
 }
 
+pub(crate) const MIN_SNR_SAMPLES: usize = 4 * super::FRAME_SAMPLES;
+
 /// Percentile-based noise floor + SNR estimate. Frame into 30 ms
 /// windows; the quiet frames between/around words ARE the noise. Noise
 /// floor = 10th pct of per-frame RMS (in dBFS); SNR = how far speech
@@ -32,10 +33,10 @@ pub struct AudioCaptureMetrics {
 /// can't flatter it. Returns `(-90.0, 0.0)` on buffers with fewer than
 /// 4 full frames (guarding against `log10(0)`).
 pub fn noise_snr(samples: &[f32]) -> (f64, f64) {
-    let mut rms = frame_rms(samples);
-    if rms.len() < 4 {
+    if samples.len() < MIN_SNR_SAMPLES {
         return (-90.0, 0.0);
     }
+    let mut rms = frame_rms(samples);
     let lo = nonzero_or_eps(percentile(&mut rms.clone(), 10.0));
     let hi = nonzero_or_eps(percentile(&mut rms, 90.0));
     let noise_dbfs = 20.0 * lo.log10();
@@ -107,8 +108,7 @@ pub fn boost_quiet(
     thresholds: &StatusThresholds,
 ) -> (Vec<f32>, AudioCaptureMetrics) {
     let metrics = capture_metrics(samples, thresholds);
-    let gain = metrics.gain as f32;
-    let boosted: Vec<f32> = samples.iter().map(|s| s * gain).collect();
+    let boosted = metrics.apply_gain(samples);
     (boosted, metrics)
 }
 
@@ -118,30 +118,51 @@ pub fn boost_quiet(
 /// is too quiet or too flat to be worth decoding; `message` is the
 /// human-readable reason (stable tokens for the test harness).
 pub fn looks_like_speech(samples: &[f32], thresholds: &StatusThresholds) -> (bool, String) {
-    let rms = nonzero_or_eps(rms_f64(samples));
-    let raw_dbfs = 20.0 * rms.log10();
-    let peak = nonzero_or_eps(peak_abs_f64(samples));
-    let (noise_dbfs, snr_db) = noise_snr(samples);
-    let input_status = input_level_status(raw_dbfs, peak, snr_db, thresholds);
-    if raw_dbfs < thresholds.min_input_dbfs {
-        let msg = format!(
-            "input too quiet: raw={:.0}dBFS < {:.0}dBFS input={}",
-            raw_dbfs, thresholds.min_input_dbfs, input_status
-        );
-        return (false, msg);
+    let metrics = capture_metrics(samples, thresholds);
+    if let Some(reason) = metrics.rejection_reason(thresholds) {
+        return (false, reason);
     }
-    if snr_db < thresholds.min_input_snr_db {
-        let msg = format!(
-            "no speech contrast: snr={:.0}dB < {:.0}dB input={}",
-            snr_db, thresholds.min_input_snr_db, input_status
-        );
-        return (false, msg);
-    }
+    let AudioCaptureMetrics {
+        raw_dbfs,
+        noise_dbfs,
+        snr_db,
+        input_status,
+        ..
+    } = metrics;
     let msg = format!(
         "raw={:.0}dBFS noise={:.0}dBFS snr={:.0}dB input={}",
         raw_dbfs, noise_dbfs, snr_db, input_status
     );
     (true, msg)
+}
+
+impl AudioCaptureMetrics {
+    pub(super) fn apply_gain(&self, samples: &[f32]) -> Vec<f32> {
+        let gain = self.gain as f32;
+        samples.iter().map(|s| s * gain).collect()
+    }
+
+    pub(super) fn rejection_reason(&self, thresholds: &StatusThresholds) -> Option<String> {
+        let Self {
+            raw_dbfs,
+            snr_db,
+            input_status,
+            ..
+        } = *self;
+        if raw_dbfs < thresholds.min_input_dbfs {
+            return Some(format!(
+                "input too quiet: raw={:.0}dBFS < {:.0}dBFS input={}",
+                raw_dbfs, thresholds.min_input_dbfs, input_status
+            ));
+        }
+        if snr_db < thresholds.min_input_snr_db {
+            return Some(format!(
+                "no speech contrast: snr={:.0}dB < {:.0}dB input={}",
+                snr_db, thresholds.min_input_snr_db, input_status
+            ));
+        }
+        None
+    }
 }
 
 #[cfg(test)]

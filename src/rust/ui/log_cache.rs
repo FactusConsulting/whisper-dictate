@@ -264,6 +264,7 @@ impl RuntimeLogCache {
                         .clone()
                         .unwrap_or_else(|| "Final output".to_owned()),
                     badge: "Final".to_owned(),
+                    mic_quality: None,
                 });
             }
             if entry.raw.starts_with("[post]") {

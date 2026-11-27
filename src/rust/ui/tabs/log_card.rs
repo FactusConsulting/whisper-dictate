@@ -62,6 +62,7 @@ fn runtime_log_card_text(
     badge: &str,
     accent: egui::Color32,
     palette: UiPalette,
+    raw_language: &str,
 ) {
     let title_size = match card.kind {
         RuntimeLogCardKind::FinalText => 17.0,
@@ -76,6 +77,26 @@ fn runtime_log_card_text(
         )
         .wrap(),
     );
+    if let Some(quality) = card.mic_quality {
+        let (key, color) = match quality {
+            MicQuality::TooQuiet => (UiTextKey::MicQualityTooQuiet, palette.error_text),
+            MicQuality::LowSnr => (UiTextKey::MicQualityLowSnr, palette.error_text),
+            MicQuality::ClipRisk => (UiTextKey::MicQualityClipRisk, palette.error_text),
+            MicQuality::Quiet => (UiTextKey::MicQualityQuiet, palette.warn_text),
+            MicQuality::Hot => (UiTextKey::MicQualityHot, palette.warn_text),
+            MicQuality::Usable => (UiTextKey::MicQualityUsable, palette.warn_text),
+            MicQuality::Good => (UiTextKey::MicQualityGood, palette.ok_text),
+        };
+        ui.add(
+            egui::Label::new(
+                egui::RichText::new(ui_text(raw_language, key))
+                    .size(12.0)
+                    .strong()
+                    .color(color),
+            )
+            .wrap(),
+        );
+    }
     // Detail is one group per line ("\n"-separated) so the card reads as a
     // scannable summary; render each as its own muted line instead of a single
     // crammed run-on row.
@@ -171,6 +192,7 @@ pub(in crate::ui) fn runtime_log_card<'a>(
     badge: &str,
     palette: UiPalette,
     copy: Option<(bool, &str)>,
+    raw_language: &str,
 ) -> Option<&'a str> {
     let (icon, accent, fill) = runtime_log_card_style(card.kind, palette);
     let transcript = card.transcript();
@@ -206,11 +228,13 @@ pub(in crate::ui) fn runtime_log_card<'a>(
                             copied = Some(text);
                         }
                         ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
-                            runtime_log_card_text(ui, card, badge, accent, palette)
+                            runtime_log_card_text(ui, card, badge, accent, palette, raw_language)
                         });
                     });
                 } else {
-                    ui.vertical(|ui| runtime_log_card_text(ui, card, badge, accent, palette));
+                    ui.vertical(|ui| {
+                        runtime_log_card_text(ui, card, badge, accent, palette, raw_language)
+                    });
                 }
             });
         });

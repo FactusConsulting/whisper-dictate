@@ -900,6 +900,7 @@ fn only_transcript_cards_offer_their_text_to_copy() {
         title: title.to_owned(),
         detail: String::new(),
         badge: badge.to_owned(),
+        mic_quality: None,
     };
     assert_eq!(
         card(RuntimeLogCardKind::FinalText, " hello world ", "Final").transcript(),

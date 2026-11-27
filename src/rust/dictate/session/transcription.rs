@@ -33,7 +33,7 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         let recording_s = json!(wire::round2(buf.len() as f64 / SR as f64));
         let skip = crate::dictate::skip::should_skip(buf.len(), self.config.min_record_seconds);
         if let Some(reason) = skip.reason() {
-            self.emit_no_text(writer, reason, recording_s.clone())?;
+            self.emit_no_text(writer, reason, recording_s, None)?;
             return Ok(UtteranceOutcome::Skipped { reason });
         }
         match self.decode_transcript(writer, buf, &recording_s)? {
@@ -50,21 +50,22 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         buf: &[f32],
         recording_s: &Value,
     ) -> Result<TranscriptDecision, SessionError> {
+        let can_measure_snr = buf.len() >= crate::audio_dsp::metrics::MIN_SNR_SAMPLES;
         let mut result = match self.transcribe.transcribe(buf, SR) {
             Ok(result) => result,
             Err(err) => {
-                let reason = match &err {
-                    TranscribeError::GpuMemory(_) => "insufficient_gpu_memory",
-                    TranscribeError::Backend(_) => "no_speech",
+                let (cause, metrics) = err.cause_and_audio();
+                let reason = if matches!(cause, TranscribeError::GpuMemory(_)) {
+                    "insufficient_gpu_memory"
+                } else {
+                    "no_speech"
                 };
-                wire::emit_status_with_output(
+                wire::emit_no_text_with_output(
                     writer,
-                    "no_text",
-                    &[
-                        ("reason", Value::from(reason)),
-                        ("error", Value::from(err.to_string())),
-                        ("recording_s", recording_s.clone()),
-                    ],
+                    reason,
+                    recording_s.clone(),
+                    Some(&err.to_string()),
+                    if can_measure_snr { metrics } else { None },
                     self.worker_event_output,
                 )?;
                 return Ok(TranscriptDecision::Rejected(UtteranceOutcome::NoText {
@@ -72,6 +73,9 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
                 }));
             }
         };
+        if !can_measure_snr {
+            result.audio_metrics = None;
+        }
         // Replacements precede classification: a dictionary may rescue a blacklist
         // phrase, or turn normal text into one. Keep unchanged backend verdicts.
         let replacements = self.rewrite_transcript(writer, &mut result)?;
@@ -89,7 +93,12 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
             None
         };
         if let Some(reason) = reason {
-            self.emit_no_text(writer, reason, recording_s.clone())?;
+            self.emit_no_text(
+                writer,
+                reason,
+                recording_s.clone(),
+                result.audio_metrics.as_ref(),
+            )?;
             return Ok(TranscriptDecision::Rejected(UtteranceOutcome::NoText {
                 reason,
             }));
@@ -128,14 +137,14 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         writer: &mut W,
         reason: &'static str,
         recording_s: Value,
+        metrics: Option<&crate::audio_dsp::AudioCaptureMetrics>,
     ) -> Result<(), SessionError> {
-        wire::emit_status_with_output(
+        wire::emit_no_text_with_output(
             writer,
-            "no_text",
-            &[
-                ("reason", Value::from(reason)),
-                ("recording_s", recording_s),
-            ],
+            reason,
+            recording_s,
+            None,
+            metrics,
             self.worker_event_output,
         )
     }

@@ -157,19 +157,29 @@ pub fn gate_and_trim<'a>(pcm: &'a [f32], thresholds: &StatusThresholds) -> Gated
 #[derive(Debug)]
 pub enum PreparedAudio {
     /// The trimmed + boosted audio to decode/encode, plus its clip duration.
-    Decode { audio: Vec<f32>, duration_s: f64 },
+    Decode {
+        audio: Vec<f32>,
+        duration_s: f64,
+        /// Measurements of the trimmed samples before applying gain.
+        metrics: AudioCaptureMetrics,
+    },
     /// The gate rejected the (trimmed) audio: the free-form reason (mapped to
     /// `too_quiet`/`no_speech` by `crate::dictate::session::normalize_gate_reason`)
     /// plus the duration to report on the resulting no-text event.
-    Reject { reason: String, duration_s: f64 },
+    Reject {
+        reason: String,
+        duration_s: f64,
+        /// Measurements of the trimmed samples, which were not boosted.
+        metrics: AudioCaptureMetrics,
+    },
 }
 
 /// Prepare `pcm` for transcription, in order:
 ///
 /// 1. [`trim_trailing_silence`] the dead-air tail ONCE,
-/// 2. gate the trimmed buffer with [`looks_like_speech`] (reject too-quiet
+/// 2. measure the trimmed buffer and gate it (reject too-quiet or
 ///    no-contrast audio before any model work), and
-/// 3. on a pass, [`boost_quiet`] the trimmed audio toward the target level.
+/// 3. on a pass, use the measured gain to boost the trimmed audio.
 ///
 /// `duration_s` is measured from the TRIMMED length -- the boost is gain-only
 /// and does not change it -- so a long dead tail neither feeds the model empty
@@ -182,7 +192,8 @@ pub fn prepare_for_transcription(
     sample_rate: u32,
     thresholds: &StatusThresholds,
 ) -> PreparedAudio {
-    let gated = gate_and_trim(pcm, thresholds);
+    let (trimmed, _) = trim_trailing_silence(pcm);
+    let metrics = capture_metrics(trimmed, thresholds);
     // Guard `sample_rate == 0` (a direct backend caller could pass it) so the
     // f64 division never reports the sample count as seconds -- an inflated
     // duration would slip an over-rate transcript past the speech-rate guard.
@@ -190,14 +201,20 @@ pub fn prepare_for_transcription(
     let duration_s = if sample_rate == 0 {
         0.0
     } else {
-        gated.trimmed.len() as f64 / f64::from(sample_rate)
+        trimmed.len() as f64 / f64::from(sample_rate)
     };
-    match gated.reject {
-        Some(reason) => PreparedAudio::Reject { reason, duration_s },
-        None => {
-            let (audio, _metrics) = boost_quiet(gated.trimmed, thresholds);
-            PreparedAudio::Decode { audio, duration_s }
-        }
+    if let Some(reason) = metrics.rejection_reason(thresholds) {
+        return PreparedAudio::Reject {
+            reason,
+            duration_s,
+            metrics,
+        };
+    }
+    let audio = metrics.apply_gain(trimmed);
+    PreparedAudio::Decode {
+        audio,
+        duration_s,
+        metrics,
     }
 }
 

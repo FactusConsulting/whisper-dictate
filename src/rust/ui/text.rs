@@ -146,6 +146,13 @@ pub(in crate::ui) enum UiTextKey {
     HealthFair,
     /// Badge label for the per-utterance health card graded "poor" (unusable).
     HealthPoor,
+    MicQualityTooQuiet,
+    MicQualityLowSnr,
+    MicQualityClipRisk,
+    MicQualityQuiet,
+    MicQualityHot,
+    MicQualityUsable,
+    MicQualityGood,
     /// "Refresh devices" button next to the Microphone picker.
     MicRefresh,
     /// Hover/help text for the Microphone "Refresh devices" button.
@@ -391,6 +398,13 @@ impl UiTextKey {
             UiTextKey::HealthGood => "Good",
             UiTextKey::HealthFair => "Fair",
             UiTextKey::HealthPoor => "Unusable",
+            UiTextKey::MicQualityTooQuiet => "Mic quality: Low — signal too weak",
+            UiTextKey::MicQualityLowSnr => "Mic quality: Low — weak signal relative to noise",
+            UiTextKey::MicQualityClipRisk => "Mic quality: Low — risk of clipping",
+            UiTextKey::MicQualityQuiet => "Mic quality: Adequate — quiet signal",
+            UiTextKey::MicQualityHot => "Mic quality: Adequate — loud signal",
+            UiTextKey::MicQualityUsable => "Mic quality: Usable — limited contrast",
+            UiTextKey::MicQualityGood => "Mic quality: Good",
             UiTextKey::MicRefresh => "Refresh devices",
             UiTextKey::MicRefreshHelp => {
                 "Run the worker to list available microphones. The result populates the \
@@ -629,6 +643,13 @@ impl UiTextKey {
             UiTextKey::HealthGood => "God",
             UiTextKey::HealthFair => "Middel",
             UiTextKey::HealthPoor => "Ubrugelig",
+            UiTextKey::MicQualityTooQuiet => "Mikrofonkvalitet: Lav — signalet er for svagt",
+            UiTextKey::MicQualityLowSnr => "Mikrofonkvalitet: Lav — svagt signal i forhold til støjen",
+            UiTextKey::MicQualityClipRisk => "Mikrofonkvalitet: Lav — risiko for overstyring",
+            UiTextKey::MicQualityQuiet => "Mikrofonkvalitet: Tilstrækkelig — lavt signalniveau",
+            UiTextKey::MicQualityHot => "Mikrofonkvalitet: Tilstrækkelig — højt signalniveau",
+            UiTextKey::MicQualityUsable => "Mikrofonkvalitet: Brugbar — begrænset kontrast",
+            UiTextKey::MicQualityGood => "Mikrofonkvalitet: God",
             UiTextKey::MicRefresh => "Opdater enheder",
             UiTextKey::MicRefreshHelp => {
                 "Kør workeren for at vise tilgængelige mikrofoner. Resultatet udfylder \

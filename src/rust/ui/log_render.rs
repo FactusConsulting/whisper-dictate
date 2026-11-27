@@ -65,6 +65,88 @@ pub(in crate::ui) struct RuntimeLogCard {
     pub(in crate::ui) title: String,
     pub(in crate::ui) detail: String,
     pub(in crate::ui) badge: String,
+    pub(in crate::ui) mic_quality: Option<MicQuality>,
+}
+
+/// Capture-only verdict, independent of transcription and post-processing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(in crate::ui) enum MicQuality {
+    TooQuiet,
+    LowSnr,
+    ClipRisk,
+    Quiet,
+    Hot,
+    Usable,
+    Good,
+}
+
+struct MicMeasurements {
+    raw_dbfs: f64,
+    peak: f64,
+    noise_dbfs: f64,
+    snr_db: f64,
+    quality: MicQuality,
+}
+
+impl MicMeasurements {
+    fn read(mut number: impl FnMut(&str) -> Option<f64>, status: &str) -> Option<Self> {
+        let mut finite = |key| number(key).filter(|value| value.is_finite());
+        let raw_dbfs = finite("audio_raw_dbfs")?;
+        let peak = finite("audio_peak")?;
+        let noise_dbfs = finite("audio_noise_dbfs")?;
+        let snr_db = finite("audio_snr_db")?;
+        let gain = finite("audio_gain")?;
+        if raw_dbfs > 0.0
+            || !(0.0..=1.0).contains(&peak)
+            || noise_dbfs > 0.0
+            || snr_db < 0.0
+            || gain <= 0.0
+        {
+            return None;
+        }
+        let quality = match status {
+            "too_quiet" => MicQuality::TooQuiet,
+            "low_snr" => MicQuality::LowSnr,
+            "clip_risk" => MicQuality::ClipRisk,
+            "quiet" => MicQuality::Quiet,
+            "hot" => MicQuality::Hot,
+            // The gate accepts less contrast than we'd call a clean signal.
+            "good" if snr_db < 15.0 => MicQuality::Usable,
+            "good" => MicQuality::Good,
+            _ => return None,
+        };
+        Some(Self {
+            raw_dbfs,
+            peak,
+            noise_dbfs,
+            snr_db,
+            quality,
+        })
+    }
+
+    fn from_payload(payload: &serde_json::Value) -> Option<Self> {
+        Self::read(
+            |key| payload.get(key)?.as_f64(),
+            payload.get("audio_input_status")?.as_str()?,
+        )
+    }
+
+    fn from_status_fields(fields: &str) -> Option<Self> {
+        let field = |key: &str| {
+            fields
+                .split_whitespace()
+                .filter_map(|token| token.split_once('='))
+                .find_map(|(name, value)| (name == key).then_some(value))
+        };
+        Self::read(|key| field(key)?.parse().ok(), field("audio_input_status")?)
+    }
+
+    fn diagnostic_detail(&self) -> String {
+        format!(
+            "raw={:.0}dBFS  peak={:.3}  noise={:.0}dBFS  snr={:.0}dB",
+            self.raw_dbfs, self.peak, self.noise_dbfs, self.snr_db
+        )
+    }
 }
 
 impl RuntimeLogCard {
@@ -228,7 +310,7 @@ fn minimal_log_card_with_payload(
     if let Some(card) = health_card(line) {
         return Some(card);
     }
-    if let Some(card) = no_text_card(line) {
+    if let Some(card) = no_text_card(line, false) {
         return Some(card);
     }
     if let Some(card) = capture_lost_card(line) {
@@ -249,6 +331,7 @@ fn minimal_log_card_with_payload(
             // mode — visible under every Final card.
             detail: post_processing_summary(payload),
             badge: "Final".to_owned(),
+            mic_quality: MicMeasurements::from_payload(payload).map(|mic| mic.quality),
         });
     }
     let text = extract_inject_preview(line)?;
@@ -262,6 +345,7 @@ fn minimal_log_card_with_payload(
         title: text,
         detail: String::new(),
         badge: "Final".to_owned(),
+        mic_quality: None,
     })
 }
 
@@ -311,6 +395,7 @@ fn diagnostic_log_card_with_payload(
             title: text,
             detail: previous_post_detail.unwrap_or("Final output").to_owned(),
             badge: "Final".to_owned(),
+            mic_quality: None,
         });
     }
 
@@ -320,7 +405,7 @@ fn diagnostic_log_card_with_payload(
 
     // no_text and capture_lost lines get dedicated friendly cards in both modes;
     // they must not be swallowed by the transient-state filter below.
-    if let Some(card) = no_text_card(line) {
+    if let Some(card) = no_text_card(line, true) {
         return Some(card);
     }
     if let Some(card) = capture_lost_card(line) {
@@ -355,6 +440,7 @@ fn diagnostic_log_card_with_payload(
             title: compact_diagnostic_title(line),
             detail: diagnostic_detail_label(line).to_owned(),
             badge: diagnostic_badge(line).to_owned(),
+            mic_quality: None,
         });
     }
 
@@ -370,6 +456,7 @@ fn status_card(line: &str) -> Option<RuntimeLogCard> {
             title: strip_log_prefix(line).to_owned(),
             detail: "Post-processing".to_owned(),
             badge: "Post".to_owned(),
+            mic_quality: None,
         });
     }
     if line.starts_with("[worker] status=") {
@@ -378,6 +465,7 @@ fn status_card(line: &str) -> Option<RuntimeLogCard> {
             title: line.trim_start_matches("[worker] status=").to_owned(),
             detail: "Worker state".to_owned(),
             badge: "Worker".to_owned(),
+            mic_quality: None,
         });
     }
     if line.starts_with("[OK]") || line.starts_with("[ERROR]") {
@@ -386,6 +474,7 @@ fn status_card(line: &str) -> Option<RuntimeLogCard> {
             title: line.to_owned(),
             detail: "Runtime message".to_owned(),
             badge: "Status".to_owned(),
+            mic_quality: None,
         });
     }
     None
@@ -399,6 +488,7 @@ fn audio_loss_card(line: &str) -> Option<RuntimeLogCard> {
         title: audio_loss_body(line)?.to_owned(),
         detail: "Recording audio loss".to_owned(),
         badge: "HealthFair".to_owned(),
+        mic_quality: None,
     })
 }
 
@@ -439,6 +529,7 @@ fn health_card(line: &str) -> Option<RuntimeLogCard> {
         // time in runtime.rs (same pattern as the "Utterance" → "Dictation"
         // badge translation), so log-parsing tests stay language-agnostic.
         badge: health_card_badge(kind).to_owned(),
+        mic_quality: None,
     })
 }
 
@@ -488,40 +579,54 @@ fn health_card_badge(kind: RuntimeLogCardKind) -> &'static str {
 
 /// Parse `[worker] status=no_text reason=<token> …` into a friendly card.
 /// Returns `None` for any other line.
-fn no_text_card(line: &str) -> Option<RuntimeLogCard> {
+fn no_text_card(line: &str, diagnostic: bool) -> Option<RuntimeLogCard> {
     let rest = line.strip_prefix("[worker] status=no_text")?;
-    // extract_metric_token returns the full "key=value" token; strip the prefix.
-    let reason_token = extract_metric_token(rest, "reason=").unwrap_or("reason=empty");
-    let reason = reason_token.strip_prefix("reason=").unwrap_or("empty");
-    if reason == "insufficient_gpu_memory" {
-        let detail = rest
-            .split_once(" error=")
-            .map(|(_, error)| error)
-            .unwrap_or("Free GPU memory, choose a smaller model, or use a hosted provider.");
-        return Some(RuntimeLogCard {
-            kind: RuntimeLogCardKind::Status,
-            title: "Not enough free GPU memory".to_owned(),
-            detail: detail.to_owned(),
-            badge: "GPU memory".to_owned(),
-        });
+    if !rest.is_empty() && !rest.starts_with(' ') {
+        return None;
     }
-    let title = match reason {
-        "no_audio" => "No audio captured",
-        "too_short" => "Too short — hold the key while speaking",
-        "too_quiet" => "Too quiet — check the microphone level",
-        "no_speech" => "No speech detected",
-        _ => "No text produced",
+    // Error text is opaque; never interpret tokens in it as measurements.
+    let (fields, error) = rest
+        .split_once(" error=")
+        .map_or((rest, None), |(fields, error)| (fields, Some(error)));
+    let mic = MicMeasurements::from_status_fields(fields);
+    // extract_metric_token returns the full "key=value" token; strip the prefix.
+    let reason_token = extract_metric_token(fields, "reason=").unwrap_or("reason=empty");
+    let reason = reason_token.strip_prefix("reason=").unwrap_or("empty");
+    let (title, badge, mut detail) = match reason {
+        "insufficient_gpu_memory" => (
+            "Not enough free GPU memory",
+            "GPU memory",
+            error
+                .unwrap_or("Free GPU memory, choose a smaller model, or use a hosted provider.")
+                .to_owned(),
+        ),
+        _ => {
+            let title = match reason {
+                "no_audio" => "No audio captured",
+                "too_short" => "Too short — hold the key while speaking",
+                "too_quiet" => "Too quiet — check the microphone level",
+                "no_speech" => "No speech detected",
+                _ => "No text produced",
+            };
+            (title, "No text", format!("reason={reason}"))
+        }
     };
-    let mut detail = format!("reason={reason}");
-    if let Some(rs_token) = extract_metric_token(rest, "recording_s=") {
-        detail.push_str("  ");
-        detail.push_str(rs_token);
+    if reason != "insufficient_gpu_memory" {
+        if let Some(rs_token) = extract_metric_token(fields, "recording_s=") {
+            detail.push_str("  ");
+            detail.push_str(rs_token);
+        }
+    }
+    if let (true, Some(mic)) = (diagnostic, &mic) {
+        detail.push('\n');
+        detail.push_str(&mic.diagnostic_detail());
     }
     Some(RuntimeLogCard {
         kind: RuntimeLogCardKind::Status,
         title: title.to_owned(),
         detail,
-        badge: "No text".to_owned(),
+        badge: badge.to_owned(),
+        mic_quality: mic.map(|mic| mic.quality),
     })
 }
 
@@ -534,6 +639,7 @@ fn capture_lost_card(line: &str) -> Option<RuntimeLogCard> {
         title: "Audio capture stopped unexpectedly — check the microphone".to_owned(),
         detail: "capture_lost".to_owned(),
         badge: "Capture lost".to_owned(),
+        mic_quality: None,
     })
 }
 
@@ -652,6 +758,7 @@ fn structured_utterance_card_from_payload(payload: &serde_json::Value) -> Option
         // crammed run-on; the renderer prints each line separately.
         detail: details.join("\n"),
         badge: "Utterance".to_owned(),
+        mic_quality: MicMeasurements::from_payload(payload).map(|mic| mic.quality),
     })
 }
 

@@ -153,20 +153,27 @@ impl TranscribeBackend for NemotronLocalTranscribeBackend {
         sample_rate: u32,
     ) -> Result<TranscribeResult, TranscribeError> {
         let guards = self.effective_guards();
-        let (audio, duration_s) =
+        let (audio, duration_s, metrics) =
             match crate::audio_dsp::prepare_for_transcription(pcm, sample_rate, &guards.thresholds)
             {
-                crate::audio_dsp::PreparedAudio::Reject { reason, duration_s } => {
+                crate::audio_dsp::PreparedAudio::Reject {
+                    reason,
+                    duration_s,
+                    metrics,
+                } => {
                     return Ok(TranscribeResult {
                         text: String::new(),
                         gate: Some(reason),
                         duration_s,
+                        audio_metrics: Some(metrics),
                         ..Default::default()
                     });
                 }
-                crate::audio_dsp::PreparedAudio::Decode { audio, duration_s } => {
-                    (audio, duration_s)
-                }
+                crate::audio_dsp::PreparedAudio::Decode {
+                    audio,
+                    duration_s,
+                    metrics,
+                } => (audio, duration_s, metrics),
             };
         let language = self.effective_language();
         let request_language = language.as_deref().unwrap_or("auto");
@@ -184,7 +191,9 @@ impl TranscribeBackend for NemotronLocalTranscribeBackend {
                     &dictionary_terms,
                 )
             })
-            .map_err(TranscribeError::from_backend_error)?;
+            .map_err(|error| {
+                TranscribeError::from_backend_error(error).with_audio(metrics.clone())
+            })?;
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let (text, is_hallucination) =
             finalize_transcript(&result.text, duration_s, guards.max_chars_per_second);
@@ -201,6 +210,7 @@ impl TranscribeBackend for NemotronLocalTranscribeBackend {
             is_hallucination,
             latency_ms,
             duration_s,
+            audio_metrics: Some(metrics),
             language: result
                 .language
                 .or_else(|| language.and_then(|value| language_result_label(&value)))
