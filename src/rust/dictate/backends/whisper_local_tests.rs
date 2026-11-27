@@ -64,7 +64,7 @@ fn transcribe_maps_loader_failure_to_backend_error() {
     let err = backend
         .transcribe(&gate_passing_pcm(), 16_000)
         .expect_err("loader failure should propagate as TranscribeError");
-    match err {
+    match err.cause_and_audio().0 {
         TranscribeError::Backend(msg) => {
             assert!(
                 msg.contains("refused to load model"),
@@ -89,7 +89,9 @@ fn transcribe_preserves_gpu_memory_error_from_context_wrapped_loader_failure() {
     let error = backend
         .transcribe(&gate_passing_pcm(), 16_000)
         .expect_err("loader must report insufficient GPU memory");
-    assert!(matches!(error, TranscribeError::GpuMemory(actual) if actual == shortfall));
+    let (cause, metrics) = error.cause_and_audio();
+    assert!(matches!(cause, TranscribeError::GpuMemory(actual) if *actual == shortfall));
+    assert!(metrics.unwrap().snr_db > 50.0);
 }
 
 #[test]
@@ -146,6 +148,9 @@ fn transcribe_gates_silence_before_the_model() {
     assert!(result.text.is_empty());
     let gate = result.gate.expect("gate reason present");
     assert!(gate.contains("too quiet"), "{gate}");
+    let metrics = result.audio_metrics.expect("gate measured the input");
+    assert_eq!(metrics.input_status, "too_quiet");
+    assert!((metrics.raw_dbfs + 180.0).abs() < 1e-9);
 }
 
 #[test]
@@ -296,7 +301,7 @@ fn empty_language_string_is_treated_as_auto_detect() {
     let err = backend
         .transcribe(&gate_passing_pcm(), 16_000)
         .expect_err("loader fails");
-    match err {
+    match err.cause_and_audio().0 {
         TranscribeError::Backend(msg) => {
             assert!(
                 msg.contains("still always fails"),
@@ -335,7 +340,7 @@ fn profile_override_sets_language_and_prompt_for_next_transcribe() {
     // The loader error surfaces, confirming the pipeline ran with the
     // override -- the language / prompt collapse would have been rejected
     // earlier if a Some("") had slipped through.
-    match err {
+    match err.cause_and_audio().0 {
         TranscribeError::Backend(msg) => {
             assert!(msg.contains("refused to load model"), "{msg}");
         }

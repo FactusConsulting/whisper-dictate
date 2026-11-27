@@ -1,12 +1,11 @@
+use super::mic_meter::MIC_GAUGE_MIN_WIDTH;
 use super::status_surface::focus_taking_actions_available;
 use super::*;
 use egui_material_icons::icons;
-use std::time::Duration;
 
 const MIC_INDICATOR_MAX_WIDTH: f32 = 330.0;
 const MIC_INDICATOR_MIN_WIDTH: f32 = 150.0;
 const MIC_GAUGE_MAX_WIDTH: f32 = 150.0;
-const MIC_GAUGE_MIN_WIDTH: f32 = 86.0;
 const RUNTIME_LOG_TOP_MARGIN: f32 = 16.0;
 const RUNTIME_LOG_CONTENT_TOP_PADDING: f32 = 10.0;
 const RUNTIME_LOG_CONTENT_BOTTOM_PADDING: f32 = 14.0;
@@ -43,7 +42,18 @@ impl WhisperDictateApp {
                     egui::vec2(mic_width, 30.0),
                     egui::Layout::left_to_right(egui::Align::Center),
                     |ui| {
-                        self.listening_gauge(ui, palette, mic_width);
+                        let gauge_width =
+                            (mic_width * 0.42).clamp(MIC_GAUGE_MIN_WIDTH, MIC_GAUGE_MAX_WIDTH);
+                        let label_width = mic_width - gauge_width - 6.0;
+                        ui.spacing_mut().item_spacing.x = 6.0;
+                        self.mic_meter(
+                            ui,
+                            palette,
+                            gauge_width,
+                            label_width,
+                            mic_label_char_budget(label_width),
+                            true,
+                        );
                     },
                 );
             }
@@ -245,65 +255,19 @@ impl WhisperDictateApp {
                 "HealthPoor" => health_poor_badge.as_str(),
                 _ => card.badge.as_str(),
             };
-            if let Some(text) =
-                runtime_log_card(ui, card, badge, palette, Some((copy_enabled, copy_hover)))
-            {
+            if let Some(text) = runtime_log_card(
+                ui,
+                card,
+                badge,
+                palette,
+                Some((copy_enabled, copy_hover)),
+                lang,
+            ) {
                 crate::injection::cancel_ui_clipboard_restore();
                 ui.ctx().copy_text(text.to_owned());
             }
             ui.add_space(8.0);
         }
-    }
-
-    fn listening_gauge(&self, ui: &mut egui::Ui, palette: UiPalette, max_width: f32) {
-        let active = self.audio_capture_active && self.runtime_state == RuntimeState::Running;
-        if active {
-            ui.ctx().request_repaint_after(Duration::from_millis(80));
-        }
-        let level = audio_meter_level(self.audio_meter_level, self.runtime_state, active);
-        let status = if active {
-            "Recording"
-        } else if self.audio_capture_opening {
-            "Opening"
-        } else if self.runtime_state == RuntimeState::Running {
-            if self.worker_ready {
-                "Ready"
-            } else {
-                "Starting"
-            }
-        } else {
-            "Idle"
-        };
-        let gauge_width = (max_width * 0.42).clamp(MIC_GAUGE_MIN_WIDTH, MIC_GAUGE_MAX_WIDTH);
-        let label_width = (max_width - gauge_width - 8.0).max(0.0);
-        let label_chars = mic_label_char_budget(label_width);
-        let audio_device = audio_device_label(&self.active_audio_device, label_chars);
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 6.0;
-            let response = level_gauge(ui, palette, level, active, gauge_width);
-            ui.add_sized(
-                egui::vec2(label_width, 18.0),
-                egui::Label::new(
-                    icon_text(
-                        icons::ICON_MIC.codepoint,
-                        format!("{status} - {audio_device}"),
-                    )
-                    .size(12.0)
-                    .color(if active {
-                        palette.accent_blue
-                    } else {
-                        palette.text_muted
-                    }),
-                ),
-            );
-            response.on_hover_text(format!(
-                "Audio input: {}\nLive: {}\nCapture: {}\nGate: {}",
-                full_audio_device_label(&self.active_audio_device),
-                live_audio_level_summary(self.audio_meter_raw_dbfs, self.audio_meter_peak, active,),
-                self.runtime_log_cache.latest_capture(),
-                self.runtime_log_cache.latest_gate()
-            ));
-        });
     }
 
     pub(in crate::ui) fn session_panel(&self, ui: &mut egui::Ui, palette: UiPalette) {
@@ -448,55 +412,6 @@ fn runtime_log_frame(palette: UiPalette) -> egui::Frame {
             top: RUNTIME_LOG_TOP_MARGIN as i8,
             bottom: 10,
         })
-}
-
-pub(in crate::ui) fn level_gauge(
-    ui: &mut egui::Ui,
-    palette: UiPalette,
-    level: f32,
-    active: bool,
-    width: f32,
-) -> egui::Response {
-    let size = egui::vec2(width.clamp(MIC_GAUGE_MIN_WIDTH, MIC_GAUGE_MAX_WIDTH), 18.0);
-    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
-    if !ui.is_rect_visible(rect) {
-        return response;
-    }
-
-    let painter = ui.painter_at(rect);
-    // egui 0.34: `Painter::rect` gained a 5th `StrokeKind` argument.
-    // `StrokeKind::Inside` reproduces the previous 4-arg behaviour (stroke drawn
-    // inside the rect edge).
-    painter.rect(
-        rect,
-        8.0,
-        palette.header_bg,
-        egui::Stroke::new(0.8, palette.border_soft),
-        egui::StrokeKind::Inside,
-    );
-
-    let segments = 18;
-    let gap = 2.0;
-    let segment_width = (rect.width() - gap * (segments - 1) as f32) / segments as f32;
-    let shown_level = if active { level.clamp(0.0, 1.0) } else { 0.0 };
-
-    for index in 0..segments {
-        let start_x = rect.left() + index as f32 * (segment_width + gap);
-        let segment_rect = egui::Rect::from_min_size(
-            egui::pos2(start_x, rect.top() + 3.0),
-            egui::vec2(segment_width, rect.height() - 6.0),
-        );
-        let threshold = (index + 1) as f32 / segments as f32;
-        let filled = shown_level >= threshold;
-        let color = if filled {
-            gauge_color_for_position(index as f32 / (segments - 1) as f32, palette)
-        } else {
-            palette.border_soft
-        };
-        painter.rect_filled(segment_rect, 3.0, color);
-    }
-
-    response
 }
 
 fn runtime_status_badge(

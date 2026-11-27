@@ -446,6 +446,21 @@ section "devices test (default device)"
         fi
     fi
 
+section "Microphone list and dictation meter"
+if command -v jq >/dev/null; then
+    if device_list="$(wd devices </dev/null)" &&
+            jq -e '.devices | (type == "array") and
+                all(.[]; (.name | test("(^null$| \\[null\\]$|^Discard all samples)"; "i") | not))' \
+                <<<"$device_list" >/dev/null; then
+        ok "the microphone list excludes ALSA's silent null source"
+    else
+        bad "device listing failed or exposed ALSA null as a microphone"
+    fi
+else
+    warn "jq is missing; skipping the microphone list check"
+fi
+warn "With a real microphone, check that the bars move while you speak and go dark after release. Check that the final dictation card shows mic quality and SNR."
+
 # --------------------------------------------------------------------------
 # GGML tiny-fixture resolution — for `self-test whisper-load` ONLY.
 #

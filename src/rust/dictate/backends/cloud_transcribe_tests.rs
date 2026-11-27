@@ -481,7 +481,9 @@ fn transcribe_empty_api_key_errors_before_network() {
     let err = backend
         .transcribe(&gate_passing_pcm(), 16_000)
         .expect_err("empty key must error");
-    assert!(matches!(err, TranscribeError::Backend(_)));
+    let (cause, metrics) = err.cause_and_audio();
+    assert!(matches!(cause, TranscribeError::Backend(_)));
+    assert!(metrics.unwrap().snr_db > 50.0);
 }
 
 /// RAII scaffold for the prompt-reload tests: takes the crate-wide
@@ -697,6 +699,10 @@ fn map_cloud_result_flags_blacklisted_transcript_as_hallucination() {
     );
     assert!(result.is_hallucination, "blacklisted 'tak' must be flagged");
     assert_eq!(result.text, "tak");
+    assert!(
+        result.audio_metrics.is_none(),
+        "the mapper has no PCM to measure"
+    );
 }
 
 #[test]
@@ -858,7 +864,10 @@ fn transcribe_empty_model_errors_before_network() {
     let err = backend
         .transcribe(&gate_passing_pcm(), 16_000)
         .expect_err("empty model must error");
-    assert!(matches!(err, TranscribeError::Backend(_)));
+    assert!(matches!(
+        err.cause_and_audio().0,
+        TranscribeError::Backend(_)
+    ));
 }
 
 #[test]

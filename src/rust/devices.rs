@@ -72,8 +72,8 @@ pub struct DeviceInfo {
 /// Enumerate every input device the platform exposes. Default-host devices
 /// come first in their cpal-native order; non-default-host devices are appended
 /// behind (de-duplicated by name) so a saved mic exposed only via JACK/ASIO
-/// still shows up in the picker. Devices with zero usable input configs or
-/// blank names are filtered out so a caller can show the list verbatim.
+/// still shows up in the picker. Blank names, devices with no usable input
+/// configs, and the silent ALSA `null` PCM are excluded.
 pub fn list_input_devices() -> Vec<DeviceInfo> {
     enumerate_all_hosts(false)
 }

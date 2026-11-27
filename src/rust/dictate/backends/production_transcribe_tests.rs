@@ -78,7 +78,10 @@ fn cloud_variant_delegates_to_cloud_backend() {
     let err = backend
         .transcribe(&gate_passing_pcm(), 16_000)
         .expect_err("empty key must error through the cloud arm");
-    assert!(matches!(err, TranscribeError::Backend(_)));
+    assert!(matches!(
+        err.cause_and_audio().0,
+        TranscribeError::Backend(_)
+    ));
 }
 
 // ── select(): the in-process session's STT-backend choice ───────────────

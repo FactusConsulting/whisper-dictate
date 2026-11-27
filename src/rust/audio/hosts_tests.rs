@@ -147,21 +147,18 @@ fn publish_name_suffixes_only_alsa_devices_with_a_divergent_backend_id() {
 }
 
 #[test]
-fn fallback_candidate_rejects_null_and_keeps_real_devices() {
-    // The ALSA null PCM opens and yields configs, so the capture gate
-    // accepts it — the fallback must still skip it by name or dictation
-    // would record silence on setups where it enumerates first. cpal's
-    // ALSA Display reports the null PCM by its description, so both
-    // spellings must be rejected.
-    assert!(!fallback_candidate("null", true));
-    assert!(!fallback_candidate("NULL", true));
-    assert!(!fallback_candidate(
+fn null_pcm_matches_the_id_and_published_label_without_hiding_routed_inputs() {
+    for name in [
+        "null",
+        "NULL",
         "Discard all samples (playback) or generate zero samples (capture)",
-        true
-    ));
-    assert!(!fallback_candidate("sysdefault", false));
-    assert!(fallback_candidate("sysdefault", true));
-    assert!(fallback_candidate("hw:0,0", true));
+        "Dummy output [null]",
+    ] {
+        assert!(is_null_pcm(name), "{name}");
+    }
+    for name in ["hw:0,6", "PulseAudio Sound Server [pulse]", "My null mic"] {
+        assert!(!is_null_pcm(name), "{name}");
+    }
 }
 
 #[test]
@@ -169,20 +166,20 @@ fn empty_selector_pick_prefers_a_real_usable_device_over_the_null_pcm() {
     // The null PCM passes the capture gate, so an order-based "first
     // usable" pick can land on it; the fallback must reach past it to
     // the first real device.
-    let names = vec!["null".to_owned(), "default".to_owned(), "hw:0,6".to_owned()];
+    let names = vec![
+        "Dummy output [null]".to_owned(),
+        "default".to_owned(),
+        "hw:0,6".to_owned(),
+    ];
     let usable = vec![true, false, true];
     assert_eq!(pick_empty_selector_index(&names, &usable), Some(2));
 }
 
 #[test]
-fn empty_selector_pick_accepts_the_null_pcm_when_nothing_real_is_usable() {
-    // Headless CI runners enumerate only the null PCM and an unopenable
-    // "default". Reporting an outage there would fail the audio-capture
-    // self-test gate; accepting the null keeps the pipeline exercisable
-    // (the null yields the sample flow the gate accepts).
-    let names = vec!["default".to_owned(), "null".to_owned()];
+fn empty_selector_reports_no_input_when_only_null_pcm_opens() {
+    let names = vec!["default".to_owned(), "Dummy output [null]".to_owned()];
     let usable = vec![false, true];
-    assert_eq!(pick_empty_selector_index(&names, &usable), Some(1));
+    assert_eq!(pick_empty_selector_index(&names, &usable), None);
 }
 
 #[test]

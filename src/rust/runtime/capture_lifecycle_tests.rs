@@ -7,6 +7,9 @@ mod cap_overflow_tests;
 #[path = "capture_cap_race_tests.rs"]
 mod cap_race_tests;
 
+#[path = "capture_meter_tests.rs"]
+mod meter_tests;
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -19,6 +22,7 @@ use super::super::recording_capture::RecordingCapture;
 use super::{CaptureLifecycle, ForwarderJob, ThreadSpawner};
 use crate::audio::PipelineEvent;
 use crate::runtime::supervisor::CaptureStop;
+use crate::runtime::RuntimeEvent;
 
 type Fixture = (
     FakeOpener,
@@ -81,7 +85,12 @@ fn closing_a_lossy_recording_publishes_one_final_overflow_event() {
     assert!(opener.feed(PipelineEvent::Frame(vec![0.75])));
     lifecycle.close_for_recording();
     assert_eq!(frames.frames(), vec![vec![0.25], vec![0.75]]);
-    assert!(rig.drain().is_empty(), "healthy recording stays quiet");
+    assert!(
+        rig.drain().iter().all(|event| {
+            matches!(event, RuntimeEvent::Worker(event) if event.event == "audio")
+        }),
+        "a healthy recording emits no capture diagnostics"
+    );
     assert_eq!(opener.open_streams(), 0);
 }
 
@@ -268,6 +277,7 @@ fn a_forwarder_that_ended_before_the_claim_is_not_announced_as_a_recording() {
     let opener = FakeOpener::default();
     let frames = Arc::new(RecordingFrames::default());
     let (lifecycle, rig) = lifecycle_with(&opener, Arc::clone(&frames), "USB mic");
+    opener.deliver_on_open(vec![0.5]);
     // Queue a terminal device error on the stream as it opens and run the
     // forwarder inline, so by the time the open path claims the stream the
     // forwarder has ended and taken it. The claim and the success report
@@ -291,6 +301,13 @@ fn a_forwarder_that_ended_before_the_claim_is_not_announced_as_a_recording() {
         "the stream went with the forwarder"
     );
     let events = rig.drain();
+    assert_eq!(frames.frames(), [vec![0.5]]);
+    assert!(
+        events.iter().all(|event| {
+            !matches!(event, RuntimeEvent::Worker(event) if event.event == "audio")
+        }),
+        "an unclaimed stream must not publish a meter reading"
+    );
     assert!(
         statuses(&events)
             .iter()
@@ -417,6 +434,18 @@ fn reaching_max_record_closes_the_microphone_until_the_recording_ends() {
         statuses(&events).is_empty(),
         "reaching the cap is not a device error"
     );
+    let meter: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            RuntimeEvent::Worker(event) if event.event == "audio" => Some(event),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(meter.first().unwrap().payload["active"], true);
+    let cleared = meter.last().unwrap();
+    assert_eq!(cleared.state.as_deref(), Some("capture_lost"));
+    assert_eq!(cleared.payload["active"], false);
+    assert_eq!(cleared.payload["level"], 0.0);
 
     lifecycle.close_for_recording();
     assert!(

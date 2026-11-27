@@ -258,20 +258,27 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
         // gate reason flows onto `TranscribeResult.gate`, which the session
         // maps to a `too_quiet`/`no_speech` no-text event.
         let guards = self.effective_transcription_guards();
-        let (audio, duration_s) =
+        let (audio, duration_s, metrics) =
             match crate::audio_dsp::prepare_for_transcription(pcm, sample_rate, &guards.thresholds)
             {
-                crate::audio_dsp::PreparedAudio::Reject { reason, duration_s } => {
+                crate::audio_dsp::PreparedAudio::Reject {
+                    reason,
+                    duration_s,
+                    metrics,
+                } => {
                     return Ok(TranscribeResult {
                         text: String::new(),
                         gate: Some(reason),
                         duration_s,
+                        audio_metrics: Some(metrics),
                         ..Default::default()
                     });
                 }
-                crate::audio_dsp::PreparedAudio::Decode { audio, duration_s } => {
-                    (audio, duration_s)
-                }
+                crate::audio_dsp::PreparedAudio::Decode {
+                    audio,
+                    duration_s,
+                    metrics,
+                } => (audio, duration_s, metrics),
             };
 
         let start = Instant::now();
@@ -280,7 +287,9 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
             .with_model(|m| {
                 m.transcribe_samples_with_language(&audio, language_hint, initial_prompt)
             })
-            .map_err(TranscribeError::from_backend_error)?;
+            .map_err(|error| {
+                TranscribeError::from_backend_error(error).with_audio(metrics.clone())
+            })?;
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
         // Collapse whitespace, blank impossibly-fast transcripts, and flag
@@ -302,6 +311,7 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
             is_hallucination,
             latency_ms,
             duration_s,
+            audio_metrics: Some(metrics),
             // Mirror the ACTUAL hint we passed to whisper.cpp so the
             // utterance event reflects a profile-driven override rather
             // than the stale construction-time config value. Empty when

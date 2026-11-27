@@ -26,11 +26,7 @@ pub(super) struct TestTranscribe {
     pub(super) seen_sample_rate: RefCell<Vec<u32>>,
 }
 
-#[derive(Clone)]
-pub(super) enum TranscribeOutcome {
-    Ok(TranscribeResult),
-    Err(String),
-}
+pub(super) type TranscribeOutcome = Result<TranscribeResult, String>;
 
 impl TestTranscribe {
     pub(super) fn returning_text(text: &str) -> Self {

@@ -358,17 +358,11 @@ mod backend_override_coverage {
             _sample_rate: u32,
         ) -> Result<TranscribeResult, TranscribeError> {
             Ok(TranscribeResult {
-                dictionary_terms: None,
                 text: "hello".to_owned(),
                 raw_text: "hello".to_owned(),
-                is_hallucination: false,
                 latency_ms: 1,
                 duration_s: 1.0,
-                language: String::new(),
-                language_probability: 0.0,
-                gate: None,
-                stt_impl: String::new(),
-                stt_accel: String::new(),
+                ..Default::default()
             })
         }
 

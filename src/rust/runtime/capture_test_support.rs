@@ -246,7 +246,7 @@ pub(super) fn statuses(events: &[RuntimeEvent]) -> Vec<(String, serde_json::Valu
     events
         .iter()
         .filter_map(|event| match event {
-            RuntimeEvent::Worker(worker) => Some((
+            RuntimeEvent::Worker(worker) if worker.event == "status" => Some((
                 worker.state.clone().unwrap_or_default(),
                 worker.payload.clone(),
             )),

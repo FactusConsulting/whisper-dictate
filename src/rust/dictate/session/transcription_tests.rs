@@ -48,12 +48,75 @@ fn transcribe_error_emits_no_text_no_speech() {
 }
 
 #[test]
+fn captured_input_measurements_reach_final_and_rejected_events() {
+    use crate::audio_dsp::{prepare_for_transcription, PreparedAudio, StatusThresholds};
+
+    struct MeasuredTranscriber;
+
+    impl TranscribeBackend for MeasuredTranscriber {
+        fn transcribe(
+            &self,
+            pcm: &[f32],
+            sample_rate: u32,
+        ) -> Result<TranscribeResult, TranscribeError> {
+            let prepared =
+                prepare_for_transcription(pcm, sample_rate, &StatusThresholds::default());
+            let (text, gate, audio_metrics) = match prepared {
+                PreparedAudio::Decode { metrics, .. } => ("clear speech", None, metrics),
+                PreparedAudio::Reject {
+                    reason, metrics, ..
+                } => ("", Some(reason), metrics),
+            };
+            Ok(TranscribeResult {
+                text: text.into(),
+                gate,
+                audio_metrics: Some(audio_metrics),
+                ..Default::default()
+            })
+        }
+    }
+
+    let (s, _, _guard) = session(MeasuredTranscriber, TestInject::new());
+    let mut pcm = vec![0.0005; 30 * 480];
+    for frames in pcm.as_chunks_mut::<960>().0 {
+        frames[480..].fill(0.02);
+    }
+    let (outcome, bytes, s) = run_one_utterance(s, &pcm);
+    assert!(matches!(outcome, UtteranceOutcome::Injected { .. }));
+    let event = parse_events(&bytes)
+        .into_iter()
+        .find(|event| event["event"] == "utterance")
+        .expect("a final utterance");
+    assert_eq!(event["text"], "clear speech");
+    assert!((event["audio_snr_db"].as_f64().unwrap() - 32.04).abs() < 0.1);
+    assert!((event["audio_raw_dbfs"].as_f64().unwrap() + 36.99).abs() < 0.1);
+    assert!((event["audio_peak"].as_f64().unwrap() - 0.02).abs() < 1e-6);
+
+    pcm.fill(0.0005);
+    let (outcome, bytes, _) = run_one_utterance(s, &pcm);
+    assert!(matches!(
+        outcome,
+        UtteranceOutcome::NoText {
+            reason: "too_quiet"
+        }
+    ));
+    let event = parse_events(&bytes)
+        .into_iter()
+        .find(|event| event["state"] == "no_text")
+        .expect("a rejected utterance");
+    assert_eq!(event["reason"], "too_quiet");
+    assert_eq!(event["audio_input_status"], "too_quiet");
+    assert!((event["audio_raw_dbfs"].as_f64().unwrap() + 66.02).abs() < 0.1);
+}
+
+#[test]
 fn gpu_memory_shortfall_emits_actionable_no_text_error() {
     struct LowGpuMemory(GpuMemoryShortfall);
 
     impl TranscribeBackend for LowGpuMemory {
-        fn transcribe(&self, _: &[f32], _: u32) -> Result<TranscribeResult, TranscribeError> {
-            Err(TranscribeError::GpuMemory(self.0))
+        fn transcribe(&self, pcm: &[f32], _: u32) -> Result<TranscribeResult, TranscribeError> {
+            let metrics = crate::audio_dsp::capture_metrics(pcm, &Default::default());
+            Err(TranscribeError::GpuMemory(self.0).with_audio(metrics))
         }
     }
 
@@ -62,7 +125,10 @@ fn gpu_memory_shortfall_emits_actionable_no_text_error() {
         free_mib: 1024,
     };
     let (s, _, _guard) = session(LowGpuMemory(shortfall), TestInject::new());
-    let (outcome, bytes, s) = run_one_utterance(s, &one_second_pcm());
+    let mut pcm = one_second_pcm();
+    pcm[..8000].fill(0.001);
+    pcm[8000..].fill(0.1);
+    let (outcome, bytes, s) = run_one_utterance(s, &pcm);
     assert!(matches!(
         outcome,
         UtteranceOutcome::NoText {
@@ -74,6 +140,7 @@ fn gpu_memory_shortfall_emits_actionable_no_text_error() {
     let idx = events.iter().position(|e| e["state"] == "no_text").unwrap();
     assert_eq!(events[idx]["reason"], "insufficient_gpu_memory");
     assert_eq!(events[idx]["error"], shortfall.to_string());
+    assert!((events[idx]["audio_snr_db"].as_f64().unwrap() - 40.0).abs() < 0.1);
     assert_eq!(events[idx + 1]["state"], "ready");
 }
 
@@ -193,4 +260,10 @@ fn transcribing_state_fires_even_on_no_audio() {
         transcribing_idx < no_text_idx,
         "transcribing must precede no_text: trace was {trace:?}",
     );
+    let no_text = parse_events(&buf)
+        .into_iter()
+        .find(|event| event["state"] == "no_text")
+        .unwrap();
+    assert_eq!(no_text["reason"], "no_audio");
+    assert!(no_text.get("audio_input_status").is_none());
 }

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use super::*;
 
-fn local_server() -> (String, thread::JoinHandle<(String, Vec<u8>)>) {
+fn local_server(response_body: &'static str) -> (String, thread::JoinHandle<(String, Vec<u8>)>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     listener.set_nonblocking(true).unwrap();
     let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
@@ -45,7 +45,7 @@ fn local_server() -> (String, thread::JoinHandle<(String, Vec<u8>)>) {
         assert!(body_len < 1_000_000);
         let mut request_body = vec![0; body_len];
         reader.read_exact(&mut request_body).unwrap();
-        let body = r#"{"text":"hello"}"#;
+        let body = response_body;
         write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
         (headers, request_body)
     });
@@ -54,7 +54,7 @@ fn local_server() -> (String, thread::JoinHandle<(String, Vec<u8>)>) {
 
 #[test]
 fn runtime_snapshot_generic_keys_are_not_sent_to_unrelated_http_endpoint() {
-    let (base_url, server) = local_server();
+    let (base_url, server) = local_server(r#"{"text":"hello"}"#);
     let runtime =
         crate::runtime::settings_snapshot::RuntimeSettingsSnapshot::from_pairs_with_ambient(
             [
@@ -85,6 +85,48 @@ fn runtime_snapshot_generic_keys_are_not_sent_to_unrelated_http_endpoint() {
         !headers.contains("authorization:"),
         "generic key leaked: {headers}"
     );
+}
+
+#[test]
+fn cloud_transcribe_keeps_pre_boost_metrics_on_text_empty_and_gate_results() {
+    use crate::audio_dsp::{capture_metrics, StatusThresholds, FRAME_SAMPLES};
+
+    let thresholds = StatusThresholds::default();
+    let speech: Vec<_> = [0.001_f32, 0.02, 0.001, 0.02, 0.001, 0.02]
+        .into_iter()
+        .flat_map(|amp| std::iter::repeat_n(amp, FRAME_SAMPLES))
+        .collect();
+    let flat = vec![0.01_f32; 6 * FRAME_SAMPLES];
+    let speech_metrics = capture_metrics(&speech, &thresholds);
+    assert_eq!(speech_metrics.peak, f64::from(0.02_f32));
+    assert!(speech_metrics.gain > 1.0);
+    let flat_metrics = capture_metrics(&flat, &thresholds);
+    assert_eq!(flat_metrics.input_status, "low_snr");
+
+    for (body, text) in [(r#"{"text":"hello"}"#, "hello"), (r#"{"text":""}"#, "")] {
+        let (base_url, server) = local_server(body);
+        let config = CloudTranscribeConfig {
+            base_url,
+            api_key: String::new(),
+            model: "test-model".to_owned(),
+            timeout_ms: 5_000,
+            language: None,
+            prompt: None,
+        };
+        let backend = CloudTranscribeBackend::new_with_provider(config, "custom")
+            .with_transcription_guards(TranscriptionGuards::from_lookup(|_| None));
+
+        let rejected = backend.transcribe(&flat, 16_000).unwrap();
+        assert!(rejected.text.is_empty());
+        assert!(rejected.gate.unwrap().contains("no speech contrast"));
+        assert_eq!(rejected.audio_metrics.as_ref(), Some(&flat_metrics));
+
+        let decoded = backend.transcribe(&speech, 16_000).unwrap();
+        assert_eq!(decoded.text, text);
+        assert!(decoded.gate.is_none());
+        assert_eq!(decoded.audio_metrics.as_ref(), Some(&speech_metrics));
+        server.join().unwrap();
+    }
 }
 
 #[test]
@@ -126,7 +168,7 @@ fn hviske_suppresses_dictionary_bias_but_keeps_transcript_replacements() {
         crate::cloud_api::HVISKE_V6,
         "other-model",
     ] {
-        let (base_url, server) = local_server();
+        let (base_url, server) = local_server(r#"{"text":"hello"}"#);
         let config = CloudTranscribeConfig {
             base_url,
             model: model.to_owned(),

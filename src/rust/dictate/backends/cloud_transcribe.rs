@@ -648,25 +648,31 @@ impl TranscribeBackend for CloudTranscribeBackend {
         // the endpoint would give it empty audio to hallucinate a caption over
         // and inflate the chars-per-second denominator of the speech-rate guard.
         let guards = self.effective_transcription_guards();
-        let audio =
+        let (audio, metrics) =
             match crate::audio_dsp::prepare_for_transcription(pcm, sample_rate, &guards.thresholds)
             {
-                crate::audio_dsp::PreparedAudio::Reject { reason, duration_s } => {
+                crate::audio_dsp::PreparedAudio::Reject {
+                    reason,
+                    duration_s,
+                    metrics,
+                } => {
                     return Ok(TranscribeResult {
                         text: String::new(),
                         gate: Some(reason),
                         duration_s,
+                        audio_metrics: Some(metrics),
                         ..Default::default()
                     });
                 }
-                crate::audio_dsp::PreparedAudio::Decode { audio, .. } => audio,
+                crate::audio_dsp::PreparedAudio::Decode { audio, metrics, .. } => (audio, metrics),
             };
         // Encode + POST the prepared (trimmed + boosted) audio. `map_cloud_result`
         // derives `duration_s` from its length -- the boost is gain-only, so the
         // length still reflects the trimmed clip the gate measured.
         let pcm = audio.as_slice();
-        let wav = encode_wav_mono_16bit(pcm, sample_rate)
-            .map_err(|e| TranscribeError::Backend(format!("wav encode failed: {e}")))?;
+        let wav = encode_wav_mono_16bit(pcm, sample_rate).map_err(|e| {
+            TranscribeError::Backend(format!("wav encode failed: {e}")).with_audio(metrics.clone())
+        })?;
         // Re-fold the dictionary terms into the prompt per utterance when a
         // reloading prompt is attached (else the fixed config prompt). The
         // profile override wins over both in `effective_*`.
@@ -702,7 +708,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
             } else {
                 format!("cloud transcription failed: {error:#}")
             };
-            TranscribeError::Backend(message)
+            TranscribeError::Backend(message).with_audio(metrics.clone())
         })?;
         let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let mut result = map_cloud_result_with_max_cps(
@@ -722,6 +728,7 @@ impl TranscribeBackend for CloudTranscribeBackend {
             request_language.as_deref(),
             guards.max_chars_per_second,
         );
+        result.audio_metrics = Some(metrics);
         result.dictionary_terms =
             (!dictionary_terms.is_empty()).then(|| dictionary_terms.into_boxed_slice());
         Ok(result)

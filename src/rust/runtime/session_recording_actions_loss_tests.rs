@@ -165,7 +165,11 @@ fn lossy_capture_is_attached_to_its_utterance_but_not_the_next_one() {
     let second = utterances(&events);
     assert_eq!(second.len(), 1);
     assert_counts(&second[0], RecordingAudioLoss::default());
-    assert!(fixture.reports.drain().is_empty());
+    assert!(fixture
+        .reports
+        .drain()
+        .iter()
+        .all(|event| { matches!(event, RuntimeEvent::Worker(worker) if worker.event == "audio") }));
 }
 
 #[test]
@@ -185,7 +189,11 @@ fn cancelled_loss_is_discarded_before_a_healthy_utterance() {
     let payloads = utterances(&events);
     assert_eq!(payloads.len(), 1);
     assert_counts(&payloads[0], RecordingAudioLoss::default());
-    assert!(fixture.reports.drain().is_empty());
+    assert!(fixture
+        .reports
+        .drain()
+        .iter()
+        .all(|event| { matches!(event, RuntimeEvent::Worker(worker) if worker.event == "audio") }));
 }
 
 #[test]

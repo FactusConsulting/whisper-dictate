@@ -35,6 +35,8 @@ pub struct TranscribeResult {
     pub latency_ms: u64,
     /// Detected audio duration in seconds.
     pub duration_s: f64,
+    /// Input signal measured before normalization, including for rejected audio.
+    pub audio_metrics: Option<crate::audio_dsp::AudioCaptureMetrics>,
     /// Detected language code; empty for
     /// auto-detect.
     pub language: String,
@@ -93,9 +95,32 @@ pub enum TranscribeError {
     /// A local speech model could not reserve enough free GPU memory.
     #[error(transparent)]
     GpuMemory(crate::model_capacity::GpuMemoryShortfall),
+    /// Inference failed after the input signal had already been measured.
+    #[error("{source}")]
+    WithAudio {
+        #[source]
+        source: Box<Self>,
+        metrics: crate::audio_dsp::AudioCaptureMetrics,
+    },
 }
 
 impl TranscribeError {
+    pub(crate) fn with_audio(self, metrics: crate::audio_dsp::AudioCaptureMetrics) -> Self {
+        Self::WithAudio {
+            source: Box::new(self),
+            metrics,
+        }
+    }
+
+    pub(crate) fn cause_and_audio(
+        &self,
+    ) -> (&Self, Option<&crate::audio_dsp::AudioCaptureMetrics>) {
+        match self {
+            Self::WithAudio { source, metrics } => (source, Some(metrics)),
+            error => (error, None),
+        }
+    }
+
     #[cfg(any(feature = "whisper-rs-local", feature = "nemotron-local"))]
     pub(crate) fn from_backend_error(error: anyhow::Error) -> Self {
         error
@@ -424,6 +449,10 @@ impl From<io::Error> for SessionError {
 /// did. Surfaced to callers so they can log or drive UI without
 /// re-parsing the worker-event stream.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Keep the completed dictation result inline without a heap allocation."
+)]
 pub enum UtteranceOutcome {
     /// `stop_and_transcribe()` ran while the session was idle (no
     /// recording in flight) — a no-op.
@@ -459,3 +488,7 @@ pub enum UtteranceOutcome {
         result: TranscribeResult,
     },
 }
+
+#[cfg(test)]
+#[path = "types_tests.rs"]
+mod tests;

@@ -1,39 +1,46 @@
 # Microphone & audio diagnostics
 
-whisper-dictate prints per-utterance diagnostics so you can tell whether your
-**microphone/room** — not the Whisper model — is the bottleneck. Three lines
-per utterance:
+In **Live dictation**, hold the push-to-talk shortcut to see the microphone's
+input level. If you use toggle mode, start recording to see the
+level. The bars stay dark in **Ready** because the app has closed the microphone.
 
-```text
-[cap] raw=-44dBFS peak=0.066 gain=15.0x noise=-84dBFS snr=45dB
-[gate] raw=-44dBFS noise=-84dBFS snr=45dB
-[stt] dur=5.1s post-boost=-20dBFS compute=0.6s text='…'
-```
+Linux can list software-routed audio inputs as well as hardware microphones.
+The `null` source generates silence, so it is not offered as a microphone
+or used as the default. A source named `Monitor of …` carries playback from
+an output device, not speech from a microphone.
+
+The **Runtime** log shows microphone quality on each measured dictation, next to
+the transcript. If the recording was measured but produced no text, its card
+shows the microphone assessment separately from the failure reason. The
+assessment describes the captured signal, not how accurately the model
+transcribed it. Recordings with too little audio to measure have no assessment.
+
+The card shows signal-to-noise ratio (SNR) and input level. Switch the log to
+**Diagnostic** for peak and estimated noise floor. To take a separate
+five-second measurement without transcribing, run `wd calibrate-mic 5`.
 
 `dBFS` = decibels relative to digital full scale: `0` is the maximum a sample
 can hold, more negative is quieter. There is no positive dBFS.
 
 ## What each number means
 
-### `raw` — input loudness before any processing (dBFS) — *context, not quality*
+### Input level — loudness before normalization (dBFS)
 
 RMS level of the captured audio. Soft, close speech typically lands around
-**−35 to −45 dBFS**. Below **−55 dBFS** the utterance is rejected as *"input too
-quiet"* — speak up, move closer, or raise the OS input level. It is normalised
-away before Whisper sees it, so a low `raw` is not bad *per se*; but very low
-`raw` forces a high `gain`, which also amplifies noise.
+**−35 to −45 dBFS**. The default speech gate rejects input below **−55 dBFS**.
+If the app reports low input, move closer, speak louder, or raise the OS input
+level. Normalization raises both speech and background noise; it does not
+improve their ratio.
 
 ### `peak` — loudest single sample of the raw input (0…1, linear) — *clipping guard*
 
-The boost is hard-capped at `0.99 / peak`, so the signal can **never clip**.
-`peak` near **1.0** means you're hitting the ceiling — back off or lower the
-input gain. A healthy `peak` is roughly **0.05–0.5**.
+Normalization caps the boost at `0.99 / peak` so it does not introduce
+clipping. A peak near **1.0** means the original input may already be clipping.
+Lower the input gain or move farther from the microphone.
 
-### `gain` — how hard quiet input was boosted (×) — *lower is better*
+### Gain — normalization multiplier (×)
 
-`gain = 10^((target − raw)/20)`, target = −20 dBFS, clamped by the no-clip cap.
-A hot, clean mic needs little boost (**≈1–5×**). **15–50×** means very quiet
-input: usable, but every dB of room hiss is boosted along with your voice.
+The target is −20 dBFS by default. On a rejected recording no boost was applied.
 
 ### `noise` — the noise floor (dBFS) — **lower (more negative) = better**
 
@@ -43,31 +50,20 @@ sit around **−75 to −90 dBFS**; **above −60 dBFS** is a noisy mic/room.
 
 ### `snr` — signal-to-noise ratio (dB) — **higher = better; the number that matters most**
 
-How far speech sits above the noise floor. It is **gain-invariant** — a louder
-mic cannot flatter it — so it is the honest quality metric:
+This is an estimate from the recording, not a room-noise measurement or a
+recognition score. A uniform gain change does not improve it.
 
-| SNR | Verdict |
+| SNR | How to read it |
 |---|---|
-| ≳ 25 dB | excellent |
-| 15–25 dB | workable |
-| < 15 dB | the mic or room is the limiting factor |
-| < 6 dB | rejected: *"no speech contrast"* |
-
-### `post-boost` — loudness after normalisation (dBFS) — *should be ≈ −20*
-
-Confirms the boost reached the −20 dBFS target. Far from −20 means the gain was
-clip-limited (peak too high) — reduce the input level.
-
-### `compute` — transcription time (seconds) — **speed, not quality**
-
-Wall-clock for the Whisper model. GPU/CUDA ≈ 0.3–1 s; CPU is several seconds.
-Affects latency only, never accuracy. `dur` is how long you spoke.
+| 25 dB or higher | Strong speech contrast |
+| 15–25 dB | Enough contrast for typical dictation |
+| 6–15 dB | Usable if the input level is healthy, but background noise may interfere |
+| Below 6 dB | Rejected by the default speech gate |
 
 ## Is my microphone good? (quick rubric)
 
-- **SNR ≥ 25 dB and noise ≤ −75 dBFS** → great mic/room; Whisper is now the only
-  limit. Improve accuracy with `--lang`, `VOICEPI_INITIAL_PROMPT`, a bigger
-  `--model`, or the language/dictionary settings (see CONFIGURATION.md).
+- **SNR ≥ 25 dB and noise ≤ −75 dBFS** → strong mic/room result. If dictation
+  is still inaccurate, check the language, dictionary and model settings.
 - **SNR 15–25 dB** → fine for dictation; move closer / reduce room noise to gain
   headroom.
 - **SNR < 15 dB or noise > −60 dBFS** → fix the mic/room **first**. No model
@@ -93,8 +89,8 @@ only leads on `raw`/`gain`, which is normalised away. **→ pick Mic #1.**
 
 ## Related tuning
 
-Capture thresholds (env vars): `VOICEPI_TARGET_DBFS` (−20; *lower*, e.g. −16,
-boosts quiet speech harder), `VOICEPI_MIN_INPUT_DBFS` (−55; reject-too-quiet
+Capture thresholds (env vars): `VOICEPI_TARGET_DBFS` (−20 dBFS; a higher value,
+such as −16, boosts quiet speech harder), `VOICEPI_MIN_INPUT_DBFS` (−55; reject-too-quiet
 gate), `VOICEPI_MIN_SNR_DB` (6; reject-no-contrast gate). These shape capture,
 not recognition. Recognition-accuracy levers are separate and are documented in
 CONFIGURATION.md — they do **not** fix a low-SNR microphone.
