@@ -1397,13 +1397,13 @@ different adapters does not add up. These are estimates, not guarantees:
 | Edda (~3.1 GB GGML file) | 4.25 GiB |
 
 Other custom GGML files are estimated from their file size. The Speech tab
-uses the GPU's total memory for model availability. Loading the model also
-requires enough free memory at that moment, so a model that fits in Settings
-can still fail at runtime. If the error says there is not enough free GPU
-memory, close other GPU-heavy apps and retry or select a smaller model. Use
-`wd model-capacity` for the Vulkan memory and model fit reported at that
-moment. Numeric precision and quantization are properties of
-the model file, not separate runtime settings.
+uses total GPU memory for model availability. After saving the model, check the
+free memory and estimated requirement next to **Start**. This is not a
+reservation. If memory becomes scarce after starting, the app shows the error
+instead of reporting missing speech. Choose a smaller model or a hosted provider
+if you need to keep other GPU workloads running. Use `wd model-capacity` for a
+command-line snapshot. Numeric precision and quantization are properties of the
+model file, not separate runtime settings.
 
 ## Native transcription and GPU acceleration
 

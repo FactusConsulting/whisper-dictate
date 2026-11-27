@@ -203,12 +203,17 @@ fn worker_error_is_visible_until_ready() {
 }
 
 #[test]
-fn no_text_error_remains_visible_through_ready() {
+fn gpu_memory_no_text_error_remains_visible_through_ready() {
     let mut app = test_app(AppSettings::default());
+    let error = crate::model_capacity::GpuMemoryShortfall {
+        required_mib: 4352,
+        free_mib: 1024,
+    }
+    .to_string();
     app.update_worker_status(&WorkerEvent {
         event: "status".to_owned(),
         state: Some("no_text".to_owned()),
-        payload: json!({"error": "transcription request failed"}),
+        payload: json!({"reason": "insufficient_gpu_memory", "error": &error}),
     });
     app.update_worker_status(&WorkerEvent {
         event: "status".to_owned(),
@@ -216,10 +221,7 @@ fn no_text_error_remains_visible_through_ready() {
         payload: json!({}),
     });
 
-    assert_eq!(
-        app.last_runtime_error.as_deref(),
-        Some("transcription request failed")
-    );
+    assert_eq!(app.last_runtime_error.as_deref(), Some(error.as_str()));
 }
 
 #[test]

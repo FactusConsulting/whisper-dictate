@@ -49,7 +49,10 @@ use whisper_rs::{
     get_lang_str, FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters,
 };
 
-use crate::model_capacity::{select_whisper_gpu, whisper_gpus, whisper_required_mib};
+use crate::model_capacity::{
+    select_whisper_gpu, whisper_gpus, whisper_gpus_for_model_load, whisper_required_mib,
+    GpuMemoryShortfall, SpeechGpu,
+};
 
 use super::dispatch::ResolvedModel;
 use super::gpu::{self, GpuPolicy};
@@ -163,29 +166,55 @@ fn select_model_gpu(
         anyhow::bail!("local Whisper requires Vulkan support; rebuild with --features whisper-rs-vulkan or select a hosted STT provider");
     }
     let required_mib = required_gpu_mib(model_path, entry)?;
-    let gpus = whisper_gpus();
+    let index = select_model_adapter(&whisper_gpus_for_model_load(), required_mib)?;
+    Ok((index, required_mib))
+}
+
+fn select_model_adapter(gpus: &[SpeechGpu], required_mib: u32) -> Result<i32> {
     if gpus.is_empty() {
         anyhow::bail!("local Whisper requires a usable Vulkan GPU with reported memory capacity; check the GPU and driver or select a hosted STT provider");
     }
-    let index = select_whisper_gpu(&gpus, required_mib).ok_or_else(|| {
-        anyhow!("local Whisper requires {required_mib} MiB of available memory on one Vulkan GPU; free GPU memory, choose a smaller model, or select a hosted STT provider")
-    })?;
-    Ok((index, required_mib))
+    if let Some(index) = select_whisper_gpu(gpus, required_mib) {
+        return Ok(index);
+    }
+    if let Some(free_mib) = gpus
+        .iter()
+        .filter(|gpu| gpu.total_mib >= required_mib)
+        .map(|gpu| gpu.free_mib)
+        .max()
+    {
+        return Err(GpuMemoryShortfall {
+            required_mib,
+            free_mib,
+        }
+        .into());
+    }
+    anyhow::bail!("local Whisper requires {required_mib} MiB of available memory on one Vulkan GPU; free GPU memory, choose a smaller model, or select a hosted STT provider")
 }
 
 impl VulkanModel {
     fn check_state_capacity(&self) -> Result<()> {
+        self.check_state_capacity_on(&whisper_gpus())
+    }
+
+    fn check_state_capacity_on(&self, gpus: &[SpeechGpu]) -> Result<()> {
         let additional_mib = self.required_mib.saturating_sub(self.resident_mib);
-        let gpus = whisper_gpus();
         let gpu = gpus.iter().find(|gpu| gpu.index == self.index).ok_or_else(|| {
             anyhow!("local Whisper cannot find its loaded Vulkan GPU {} with reported memory capacity", self.index)
         })?;
-        if gpu.total_mib < self.required_mib || gpu.free_mib < additional_mib {
+        if gpu.total_mib < self.required_mib {
             anyhow::bail!(
                 "local Whisper requires {additional_mib} MiB free on Vulkan GPU {} for inference state; {} MiB available",
                 self.index,
                 gpu.free_mib
             );
+        }
+        if gpu.free_mib < additional_mib {
+            return Err(GpuMemoryShortfall {
+                required_mib: additional_mib,
+                free_mib: gpu.free_mib,
+            }
+            .into());
         }
         Ok(())
     }

@@ -280,7 +280,7 @@ impl TranscribeBackend for WhisperLocalTranscribeBackend {
             .with_model(|m| {
                 m.transcribe_samples_with_language(&audio, language_hint, initial_prompt)
             })
-            .map_err(|e| TranscribeError::Backend(format!("{e:#}")))?;
+            .map_err(TranscribeError::from_backend_error)?;
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
 
         // Collapse whitespace, blank impossibly-fast transcripts, and flag

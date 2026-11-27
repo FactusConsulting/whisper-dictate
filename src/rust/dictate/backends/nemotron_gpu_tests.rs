@@ -141,12 +141,14 @@ fn no_ready_gpu_refuses_to_open_a_runtime_or_create_a_recognizer() {
         |_, _, _| panic!("no suitable GPU was found"),
     )
     .expect_err("a busy or disabled GPU cannot admit a local model");
-    assert!(error
-        .to_string()
-        .contains("at least 2048 MiB total and free VRAM"));
     let expected = if Accelerator::Vulkan.available() {
+        let shortfall = error
+            .downcast_ref::<crate::model_capacity::GpuMemoryShortfall>()
+            .expect("a usable but busy GPU must report the shortfall");
+        assert_eq!((shortfall.required_mib, shortfall.free_mib), (2048, 2047));
         &[Accelerator::Vulkan][..]
     } else {
+        assert!(error.to_string().contains("verified GPU runtime"));
         &[]
     };
     assert_eq!(probes, expected);

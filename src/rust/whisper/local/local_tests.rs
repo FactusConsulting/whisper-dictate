@@ -10,6 +10,71 @@
 use super::*;
 use std::env;
 
+#[test]
+fn model_selection_reports_best_free_memory_on_adapters_large_enough() {
+    let gpus = [
+        SpeechGpu {
+            index: 0,
+            total_mib: 2048,
+            free_mib: 2048,
+        },
+        SpeechGpu {
+            index: 1,
+            total_mib: 8192,
+            free_mib: 512,
+        },
+        SpeechGpu {
+            index: 2,
+            total_mib: 4096,
+            free_mib: 1024,
+        },
+    ];
+    let error = select_model_adapter(&gpus, 4096).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<GpuMemoryShortfall>(),
+        Some(&GpuMemoryShortfall {
+            required_mib: 4096,
+            free_mib: 1024,
+        })
+    );
+    let no_gpu = select_model_adapter(&[], 4096).unwrap_err();
+    assert!(no_gpu.to_string().contains("usable Vulkan GPU"));
+    let too_small = select_model_adapter(&gpus[..1], 4096).unwrap_err();
+    assert!(too_small.downcast_ref::<GpuMemoryShortfall>().is_none());
+    assert!(too_small.to_string().contains("requires 4096 MiB"));
+}
+
+#[test]
+fn inference_state_checks_additional_memory_on_the_loaded_adapter() {
+    let model = VulkanModel {
+        index: 1,
+        required_mib: 4096,
+        resident_mib: 3072,
+    };
+    let mut gpus = [
+        SpeechGpu {
+            index: 0,
+            total_mib: 8192,
+            free_mib: 4096,
+        },
+        SpeechGpu {
+            index: 1,
+            total_mib: 8192,
+            free_mib: 512,
+        },
+    ];
+    let error = model.check_state_capacity_on(&gpus).unwrap_err();
+    assert_eq!(
+        error.downcast_ref::<GpuMemoryShortfall>(),
+        Some(&GpuMemoryShortfall {
+            required_mib: 1024,
+            free_mib: 512,
+        })
+    );
+    gpus[1].free_mib = 1024;
+    assert!(model.check_state_capacity_on(&gpus).is_ok());
+}
+
 /// Env vars pointing at a downloaded whisper.cpp model file and a
 /// matching "hello world" WAV. CI does not set these, so the heavy
 /// end-to-end test is skipped there; a developer running

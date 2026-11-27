@@ -4,7 +4,7 @@ use std::ffi::CStr;
 
 use ash::vk;
 
-use super::{SpeechGpu, MIB};
+use super::{GpuInfo, SpeechGpu, MIB};
 
 mod native;
 
@@ -17,6 +17,34 @@ struct Adapter {
 }
 
 impl Adapters {
+    pub(crate) fn probe_for_model_load<T: AsRef<[GpuInfo]>>(query: impl FnOnce() -> T) -> Self {
+        let mut adapters = Self::probe();
+        if adapters.0.iter().any(|adapter| {
+            adapter.capacity.is_some() && adapter.description.to_bytes().starts_with(b"NVIDIA ")
+        }) {
+            adapters.limit_nvidia_free_mib(query().as_ref());
+        }
+        adapters
+    }
+
+    /// Vulkan's per-process budget can exceed currently unused physical VRAM.
+    /// When both reports identify the adapter, use the smaller value so starting
+    /// a model does not rely on paging out another workload.
+    pub(crate) fn limit_nvidia_free_mib(&mut self, gpus: &[GpuInfo]) {
+        for adapter in &mut self.0 {
+            if let Some((_, free)) = &mut adapter.capacity {
+                for gpu in gpus
+                    .iter()
+                    .filter(|gpu| gpu.name.as_bytes() == adapter.description.to_bytes())
+                {
+                    // Duplicate descriptions are ambiguous; use the lowest free
+                    // memory instead of matching unrelated driver ordinals.
+                    *free = (*free).min(gpu.free_mb);
+                }
+            }
+        }
+    }
+
     pub(crate) fn max_total_mib(&self) -> u32 {
         self.0
             .iter()
@@ -26,12 +54,11 @@ impl Adapters {
     }
 
     #[cfg(feature = "nemotron-local")]
-    pub(crate) fn has_capacity(&self, required_mib: u32) -> bool {
-        self.0.iter().any(|adapter| {
-            adapter
-                .capacity
-                .is_some_and(|(total, free)| total >= required_mib && free >= required_mib)
-        })
+    pub(crate) fn best_free_mib(&self, required_mib: u32) -> Option<u32> {
+        super::best_free_mib(
+            self.0.iter().filter_map(|adapter| adapter.capacity),
+            required_mib,
+        )
     }
 
     /// Resolve a ggml descriptor against independently queried physical
@@ -284,6 +311,38 @@ mod tests {
         assert!(adapters.whisper_gpus().is_empty());
     }
 
+    #[test]
+    fn model_load_uses_available_physical_vram_when_vulkan_budget_is_higher() {
+        let nvidia = c"NVIDIA RTX test";
+        let other = c"Other adapter";
+        let mut adapters = Adapters(vec![
+            Adapter {
+                description: nvidia.into(),
+                pci_bus: None,
+                capacity: Some((10240, 3817)),
+            },
+            Adapter {
+                description: other.into(),
+                pci_bus: None,
+                capacity: Some((8192, 4096)),
+            },
+        ]);
+        let reported = |index, name: &CStr, free_mb| GpuInfo {
+            index,
+            name: name.to_string_lossy().into_owned(),
+            total_mb: 10240,
+            free_mb,
+            source: "nvidia-smi",
+        };
+        adapters.limit_nvidia_free_mib(&[
+            reported(1, nvidia, 1134),
+            reported(0, nvidia, 8000),
+            reported(2, c"Unmatched", 0),
+        ]);
+        assert_eq!(adapters.capacity(nvidia, None), Some((10240, 1134)));
+        assert_eq!(adapters.capacity(other, None), Some((8192, 4096)));
+    }
+
     #[cfg(feature = "nemotron-local")]
     #[test]
     fn capacity_uses_a_single_supported_adapter_without_pooling() {
@@ -305,12 +364,12 @@ mod tests {
             },
         ]);
         assert_eq!(adapters.max_total_mib(), 8192);
-        assert!(adapters.has_capacity(4096));
-        assert!(!adapters.has_capacity(4097));
+        assert_eq!(adapters.best_free_mib(4096), Some(4096));
+        assert_eq!(adapters.best_free_mib(4097), Some(2048));
 
         adapters.0.truncate(1);
         assert_eq!(adapters.max_total_mib(), 0);
-        assert!(!adapters.has_capacity(0));
+        assert_eq!(adapters.best_free_mib(0), None);
     }
 
     #[test]

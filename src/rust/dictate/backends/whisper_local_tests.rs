@@ -29,6 +29,7 @@ use super::{
 };
 use crate::dictate::session::preview::PreviewBackend;
 use crate::dictate::session::types::{TranscribeBackend, TranscribeError};
+use crate::model_capacity::GpuMemoryShortfall;
 use crate::whisper::{IdleUnloadingModel, LocalWhisper};
 
 // ── trait-impl error mapping ─────────────────────────────────────────────────
@@ -70,7 +71,25 @@ fn transcribe_maps_loader_failure_to_backend_error() {
                 "expected wrapped loader error, got: {msg}"
             );
         }
+        other => panic!("expected backend error, got: {other}"),
     }
+}
+
+#[test]
+fn transcribe_preserves_gpu_memory_error_from_context_wrapped_loader_failure() {
+    let shortfall = GpuMemoryShortfall {
+        required_mib: 4352,
+        free_mib: 1024,
+    };
+    let model = IdleUnloadingModel::<LocalWhisper>::new(
+        move || Err(anyhow::Error::new(shortfall).context("loading local Whisper model")),
+        None,
+    );
+    let backend = WhisperLocalTranscribeBackend::new(model, WhisperBackendConfig::default());
+    let error = backend
+        .transcribe(&gate_passing_pcm(), 16_000)
+        .expect_err("loader must report insufficient GPU memory");
+    assert!(matches!(error, TranscribeError::GpuMemory(actual) if actual == shortfall));
 }
 
 #[test]
@@ -284,6 +303,7 @@ fn empty_language_string_is_treated_as_auto_detect() {
                 "expected loader error to propagate, got: {msg}"
             );
         }
+        other => panic!("expected backend error, got: {other}"),
     }
 }
 
@@ -319,6 +339,7 @@ fn profile_override_sets_language_and_prompt_for_next_transcribe() {
         TranscribeError::Backend(msg) => {
             assert!(msg.contains("refused to load model"), "{msg}");
         }
+        other => panic!("expected backend error, got: {other}"),
     }
 }
 

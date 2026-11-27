@@ -122,6 +122,7 @@ impl WhisperDictateApp {
                 }
             });
         });
+        self.gpu_start_status_label(ui, palette);
         self.compact_metadata(ui, palette);
         self.compact_progress(ui, palette);
         self.last_transcript_panel(ui, palette);
@@ -132,19 +133,8 @@ impl WhisperDictateApp {
     fn compact_start_stop(&mut self, ui: &mut egui::Ui, palette: UiPalette) {
         let is_stopped = self.runtime_state == RuntimeState::Stopped;
         if is_stopped {
-            if ui
-                .add_enabled(
-                    self.nemotron_probe_active.is_none(),
-                    egui::Button::new(
-                        icon_text(
-                            icons::ICON_PLAY_ARROW.codepoint,
-                            ui_text(&self.settings.ui_language, UiTextKey::Start),
-                        )
-                        .strong(),
-                    )
-                    .fill(palette.accent_dark)
-                    .min_size(egui::vec2(80.0, 30.0)),
-                )
+            if self
+                .manual_start_button(ui, palette, egui::vec2(80.0, 30.0))
                 .clicked()
             {
                 self.start_runtime();

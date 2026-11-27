@@ -7,6 +7,7 @@ pub(super) fn test_app(settings: AppSettings) -> WhisperDictateApp {
         app_version: "test".to_owned(),
         selected_tab: Tab::Log,
         runtime_state: RuntimeState::Stopped,
+        gpu_start: gpu_start::GpuStartState::for_render_test(),
         runtime_log: String::new(),
         runtime_log_cache: RuntimeLogCache::default(),
         runtime_log_scroll_to_bottom: false,

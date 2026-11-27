@@ -72,6 +72,7 @@ impl WhisperDictateApp {
             self.last_runtime_error = Some(err.to_string());
             self.append_runtime_log(format!("[ui] start failed: {err}"));
         } else {
+            self.gpu_start.suspend();
             self.pending_runtime_settings = Some(self.settings.clone());
             self.worker_start_time = Some(std::time::Instant::now());
         }
@@ -204,11 +205,20 @@ impl WhisperDictateApp {
         self.runtime_state = self.supervisor.state();
     }
 
-    pub(in crate::ui) fn worker_command(&self) -> WorkerCommand {
+    pub(in crate::ui) fn saved_worker_base_command(&self) -> WorkerCommand {
         let mut command = default_worker_command();
+        // Like the native session, prefer an explicitly persisted provider.
+        // Pending form edits must not change the effective Start route.
+        let provider = config::load_explicit_stt_provider()
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| self.saved_settings.stt_provider.clone());
+        command.runtime.set_stt_provider(provider);
         command
-            .runtime
-            .set_stt_provider(self.settings.stt_provider.clone());
+    }
+
+    pub(in crate::ui) fn worker_command(&self) -> WorkerCommand {
+        let mut command = self.saved_worker_base_command();
         if let Some(xkb_layout) = effective_xkb_layout(&self.settings) {
             command
                 .runtime

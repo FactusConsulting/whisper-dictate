@@ -29,6 +29,7 @@ impl eframe::App for WhisperDictateApp {
         // placed ahead of the compact-mode early return so that branch cannot
         // strand the one-shot.
         self.poll_autostart_runtime();
+        self.poll_gpu_start(&ctx);
         let palette = ui_palette(&self.settings.ui_theme);
         apply_ui_theme(&ctx, &self.settings.ui_text_scale, &self.settings.ui_theme);
 
@@ -85,6 +86,17 @@ impl eframe::App for WhisperDictateApp {
                     .inner_margin(egui::Margin::symmetric(16, TOP_PANEL_V_MARGIN as i8)),
             )
             .show(ui, |ui| self.top_status_bar(ui, palette));
+        if self.gpu_start_status().is_some() {
+            egui::Panel::top("gpu_start_status")
+                .resizable(false)
+                .exact_size(ui.text_style_height(&egui::TextStyle::Small) + 8.0)
+                .frame(
+                    egui::Frame::default()
+                        .fill(palette.panel_bg)
+                        .inner_margin(egui::Margin::symmetric(16, 4)),
+                )
+                .show(ui, |ui| self.gpu_start_status_label(ui, palette));
+        }
 
         // Thin global status bar: saved/unsaved state + the latest message,
         // on every tab, replacing the per-page Messages card.

@@ -631,6 +631,33 @@ fn no_text_card_renders_friendly_title_in_diagnostic_and_minimal() {
 }
 
 #[test]
+fn gpu_memory_status_log_shows_actionable_card_in_both_modes() {
+    let error = crate::model_capacity::GpuMemoryShortfall {
+        required_mib: 4352,
+        free_mib: 1024,
+    }
+    .to_string();
+    let line = worker_status_log_line(&WorkerEvent {
+        event: "status".to_owned(),
+        state: Some("no_text".to_owned()),
+        payload: serde_json::json!({
+            "reason": "insufficient_gpu_memory",
+            "error": &error,
+            "recording_s": 1.0,
+        }),
+    })
+    .unwrap();
+    assert!(line.contains(&error));
+    for mode in [LogViewMode::Minimal, LogViewMode::Diagnostic] {
+        let cards = runtime_log_cards(&line, mode);
+        assert_eq!(cards.len(), 1);
+        assert_eq!(cards[0].title, "Not enough free GPU memory");
+        assert_eq!(cards[0].badge, "GPU memory");
+        assert_eq!(cards[0].detail, error);
+    }
+}
+
+#[test]
 fn no_text_card_not_swallowed_by_structured_utterance_suppression() {
     // When a structured utterance IS present in the log, no_text cards from a
     // different (failed) press must still appear — they are not [post]/detail lines.
