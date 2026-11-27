@@ -24,8 +24,8 @@
   built by nextest. PR CI covers alternate Cargo feature sets,
   profile-specific regressions, and Windows-only behavior.
 - The script uses the Linux devcontainer image through Rancher Desktop's
-  Docker `default` context. Start Rancher Desktop's Moby container engine
-  first. This avoids the need for MSVC `lib.exe` on Windows. Docker caches
+  Docker `default` context. Start Rancher Desktop with its Docker engine
+  enabled. This avoids the need for MSVC `lib.exe` on Windows. Docker caches
   image layers after the first build. `-DryRun` prints the command arguments
   without invoking Docker.
 
