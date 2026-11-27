@@ -158,7 +158,7 @@ fn painted_card(log: &str, mode: LogViewMode, lang: &str, width: f32) -> String 
     let [card] = cache.cards(mode) else {
         panic!("expected exactly one card in {mode:?}");
     };
-    let output = egui::Context::default().run_ui(
+    let mut output = egui::Context::default().run_ui(
         egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(
                 egui::Pos2::ZERO,
@@ -177,6 +177,7 @@ fn painted_card(log: &str, mode: LogViewMode, lang: &str, width: f32) -> String 
             );
         },
     );
+    output.textures_delta.clear();
     output
         .shapes
         .iter()

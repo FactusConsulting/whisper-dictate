@@ -191,7 +191,7 @@ mod tests {
 
     fn paint_live_meter(app: &mut WhisperDictateApp) -> (Vec<String>, usize) {
         let palette = ui_palette(&app.settings.ui_theme);
-        let frame = egui::Context::default().run_ui(
+        let mut frame = egui::Context::default().run_ui(
             egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(
                     egui::Pos2::ZERO,
@@ -201,6 +201,7 @@ mod tests {
             },
             |ui| app.runtime_tab(ui),
         );
+        frame.textures_delta.clear();
         let mut labels = Vec::new();
         let mut filled_bars = 0;
         for paint in frame.shapes {
