@@ -48,7 +48,7 @@ impl WhisperDictateApp {
             && device_error.is_none()
             && self.pipeline_stage.is_none()
             && self.hotkey_conflict.is_none())
-        .then(|| {
+        .then_some({
             if settings.toggle_mode {
                 (UiTextKey::MicPressShortcut, UiTextKey::MicPressForLevel)
             } else {

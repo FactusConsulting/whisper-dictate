@@ -449,6 +449,10 @@ impl From<io::Error> for SessionError {
 /// did. Surfaced to callers so they can log or drive UI without
 /// re-parsing the worker-event stream.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(
+    clippy::large_enum_variant,
+    reason = "Keep the completed dictation result inline without a heap allocation."
+)]
 pub enum UtteranceOutcome {
     /// `stop_and_transcribe()` ran while the session was idle (no
     /// recording in flight) — a no-op.

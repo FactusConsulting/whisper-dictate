@@ -78,7 +78,7 @@ fn captured_input_measurements_reach_final_and_rejected_events() {
 
     let (s, _, _guard) = session(MeasuredTranscriber, TestInject::new());
     let mut pcm = vec![0.0005; 30 * 480];
-    for frames in pcm.chunks_exact_mut(960) {
+    for frames in pcm.as_chunks_mut::<960>().0 {
         frames[480..].fill(0.02);
     }
     let (outcome, bytes, s) = run_one_utterance(s, &pcm);
