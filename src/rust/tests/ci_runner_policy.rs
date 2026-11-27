@@ -188,12 +188,11 @@ fn docker_jobs_use_the_docker_runner_behind_a_fork_guard() {
 
 #[test]
 fn matrix_runner_mapping_keeps_windows_hosted_and_os_names_stable() {
-    let mut mapped = 0;
-    for job in jobs()
-        .into_iter()
+    let jobs = jobs();
+    for job in jobs
+        .iter()
         .filter(|job| runs_on(job) == Some(MATRIX_RUNNER))
     {
-        mapped += 1;
         // The required check names embed `matrix.os`; the runner must be a
         // separate expression, never a rename of the `os` values.
         assert!(
@@ -203,10 +202,14 @@ fn matrix_runner_mapping_keeps_windows_hosted_and_os_names_stable() {
             job.name
         );
     }
-    assert!(
-        mapped >= 6,
-        "expected the mixed matrices to use the mapping, saw {mapped}"
-    );
+    for name in ["rust-features", "rust-release"] {
+        assert!(
+            jobs.iter().any(|job| job.file == "test.yml"
+                && job.name == name
+                && runs_on(job) == Some(MATRIX_RUNNER)),
+            "{name} must run on native Windows and Linux runners"
+        );
+    }
 }
 
 #[test]

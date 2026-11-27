@@ -16,25 +16,18 @@
 
 ## Validation Commands
 
-- Rust tests: `cargo test --manifest-path src/rust/Cargo.toml`
-- Rust checks:
-  `cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check`
-  and `cargo clippy --manifest-path src/rust/Cargo.toml -p whisper-dictate-app --all-targets --all-features -- -D warnings`
-- **Native clippy is broken on Windows boxes without MSVC `lib.exe`.**
-  Use `pwsh scripts/dev/dev-check.ps1` instead — it runs the CI rust
-  matrix's **Linux leg** (fmt + clippy + default test + feature-gated
-  tests for rust-hotkeys / audio-capture + whisper-rs-local build + CLI
-  smoke) inside the devcontainer image via Rancher Desktop's Docker
-  `default` context. The image is built once on first run
-  (~5 min); thereafter Docker's layer cache keeps subsequent runs
-  near-instant. Requires Rancher Desktop with its container engine running. Run this BEFORE every
-  signed push so clippy lints fail locally rather than costing a CI
-  roundtrip. NOTE: the `rust (windows-2025)` matrix leg is NOT covered
-  — for Windows-specific code (tray, input injection on Win32, WASAPI
-  capture, etc.) lean on CI to catch Windows-only regressions.
-  `-SkipExtraFeatures` limits the run to the default-feature leg only
-  (fast iteration when feature paths are untouched).
-  `-DryRun` prints every cargo argv without invoking docker.
+- Before every signed push, run `pwsh -NoProfile -File scripts/dev/dev-check.ps1`.
+  This checks formatting and runs Clippy with the `ui-egui-glow` profile and
+  warnings denied. It runs nextest (including `repository_policy`) and
+  doctests with the locked `shipping` profile and default features disabled,
+  then runs `wd --help`, `wd --version`, and `wd config path` on the binary
+  built by nextest. PR CI covers alternate Cargo feature sets,
+  profile-specific regressions, and Windows-only behavior.
+- The script uses the Linux devcontainer image through Rancher Desktop's
+  Docker `default` context. Start Rancher Desktop's Moby container engine
+  first. This avoids the need for MSVC `lib.exe` on Windows. Docker caches
+  image layers after the first build. `-DryRun` prints the command arguments
+  without invoking Docker.
 
 ## Regression Tests
 

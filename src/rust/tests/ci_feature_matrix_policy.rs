@@ -1,20 +1,11 @@
-//! Event-dependent shape of the `rust-features` CI matrix.
-//!
-//! Pull requests test the two ends of the feature space (`base` and
-//! `shipping`) and type-check each partial feature set in the `features`
-//! cell, so feature-gating breaks are caught before merge. Push to main and
-//! the release `workflow_call`
-//! (whose `github.event_name` is the caller's `push` / `workflow_dispatch`)
-//! run only the exact shipped feature set plus clippy. The anchor cell that
-//! owns the once-per-run checks must exist on every event.
+//! Compatibility checks run on pull requests without duplicating the
+//! shipping test suite.
 
 mod common;
 
 use std::collections::BTreeSet;
 
 const KEPT_OFF_PR: [&str; 2] = ["shipping", "clippy-glow"];
-const ANCHOR_PROFILE: &str =
-    "ANCHOR_PROFILE: ${{ github.event_name == 'pull_request' && 'base' || 'shipping' }}";
 
 fn rust_features_job() -> String {
     let workflow = std::fs::read_to_string(common::repo_root().join(".github/workflows/test.yml"))
@@ -82,27 +73,22 @@ fn cells(job: &str, event_name: &str) -> BTreeSet<String> {
 #[test]
 fn pull_requests_run_every_cell() {
     let job = rust_features_job();
-    let all: BTreeSet<_> = profile_ids(&job).into_iter().collect();
-    for required in ["base", "shipping", "clippy-glow", "features"] {
-        assert!(all.contains(required), "missing cell {required}");
-    }
-    assert_eq!(cells(&job, "pull_request"), all);
+    let required: BTreeSet<_> = ["shipping", "clippy-glow", "features"]
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(cells(&job, "pull_request"), required);
 }
 
-/// The partial feature sets each compile on their own, tests included, and a
-/// test gated on a partial set (one that `base` and `shipping` both exclude)
-/// still runs.
+/// Compile the default and supported partial feature sets with test targets.
 #[test]
-fn the_features_cell_checks_each_partial_feature_set() {
+fn the_features_cell_checks_default_and_each_partial_feature_set() {
     let job = rust_features_job();
-    let checks = job
-        .split("      - name: Rust feature-set checks\n")
-        .nth(1)
-        .and_then(|body| body.split("\n      - name: ").next())
-        .expect("feature-set check step");
-    assert!(checks.contains("matrix.profile.role == 'features'"));
-    assert!(checks.contains("cargo check "));
-    assert!(checks.contains("--all-targets"));
+    let checks = step(&job, "Rust feature-set checks");
+    assert!(checks.contains("matrix.profile.id == 'features'"));
+    assert!(checks
+        .lines()
+        .any(|line| line.contains("cargo check ") && line.ends_with("--all-targets")));
     assert!(
         checks.contains("RUSTFLAGS: -D warnings"),
         "a partial feature set must compile without warnings"
@@ -124,10 +110,9 @@ fn the_features_cell_checks_each_partial_feature_set() {
             "feature set {required} is not checked"
         );
     }
-    let partial_tests = job
-        .split("      - name: Rust tests that need a partial feature set\n")
-        .nth(1)
-        .expect("partial-feature-set test step");
+    let partial_tests = step(&job, "Rust tests that need a partial feature set");
+    assert!(partial_tests.contains("runner.os == 'Linux'"));
+    assert!(partial_tests.contains("--lib"));
     assert!(partial_tests.contains("--features rust-hotkeys,rust-injection"));
     assert!(partial_tests.contains(
         "test(=runtime::rust_session_sink_tests::production_sink_refuses_without_real_backends)"
@@ -145,30 +130,41 @@ fn push_and_release_run_only_the_shipping_and_clippy_cells() {
     }
 }
 
+fn step<'a>(job: &'a str, name: &str) -> &'a str {
+    let header = format!("      - name: {name}\n");
+    job.split(header.as_str())
+        .nth(1)
+        .and_then(|body| body.split("\n      - name: ").next())
+        .unwrap_or_else(|| panic!("missing step: {name}"))
+}
+
 #[test]
-fn once_per_run_checks_follow_an_anchor_cell_present_on_every_event() {
+fn default_feature_regressions_are_focused_and_cross_platform() {
     let job = rust_features_job();
-    assert!(job.contains(ANCHOR_PROFILE));
-    assert!(cells(&job, "pull_request").contains("base"));
-    assert!(cells(&job, "push").contains("shipping"));
-    for step in [
-        "      - name: Rust format\n",
-        "      - name: Rust tests\n",
-        "      - name: Rust tests (Windows non-anchor)\n",
-        "      - name: Windows release-script fixture\n",
-    ] {
-        let gate = job
-            .split(step)
-            .nth(1)
-            .and_then(|body| {
-                body.lines()
-                    .find(|line| line.trim_start().starts_with("if: "))
-            })
-            .unwrap_or_else(|| panic!("{step:?} step gate"));
-        assert!(
-            gate.contains("env.ANCHOR_PROFILE"),
-            "{step:?} must follow the anchor cell, not a fixed profile: {gate}"
-        );
-        assert!(!gate.contains("'base'"), "{step:?} pins base: {gate}");
-    }
+    let default_tests = step(&job, "Rust tests that need the default feature set");
+    assert!(default_tests.contains("matrix.profile.id == 'features'"));
+    assert!(!default_tests.contains("runner.os"));
+    assert!(default_tests.contains("--lib"));
+    assert!(default_tests.contains("--bin wd"));
+    assert!(default_tests.contains("test("));
+    assert!(!default_tests.contains("--features"));
+}
+
+#[test]
+fn shipping_format_and_clippy_report_do_not_repeat_work() {
+    let job = rust_features_job();
+    let format = step(&job, "Rust format");
+    assert!(format.contains("matrix.profile.id == 'shipping'"));
+    assert!(format.contains("runner.os == 'Linux'"));
+    assert_eq!(job.matches("cargo fmt ").count(), 1);
+
+    let windows_clippy = step(&job, "Rust Clippy");
+    assert!(windows_clippy.contains("runner.os == 'Windows'"));
+    assert!(windows_clippy.contains("cargo clippy "));
+    let linux_clippy = step(&job, "Rust Clippy with a report for Sonar");
+    assert!(linux_clippy.contains("runner.os == 'Linux'"));
+    assert!(linux_clippy.contains("cargo clippy "));
+    assert!(linux_clippy.contains("--message-format=json"));
+    assert!(linux_clippy.contains("clippy-report.json"));
+    assert_eq!(job.matches("cargo clippy ").count(), 2);
 }

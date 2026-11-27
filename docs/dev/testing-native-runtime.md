@@ -5,44 +5,51 @@ toolchain and the platform tools listed below.
 
 ## Automated checks
 
-Run the repository's Rust test suite from the checkout:
+Run the Linux developer gate from the checkout:
 
 ```powershell
-cargo install cargo-nextest --locked
-cargo nextest run --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --profile ci
-cargo test --manifest-path src/rust/Cargo.toml --locked -p whisper-dictate-app --doc
-cargo fmt --manifest-path src/rust/Cargo.toml --all -- --check
+pwsh scripts/dev/dev-check.ps1
 ```
 
-`cargo-nextest` is the CI runner. It does not run doctests, so retain the
-separate `cargo test --doc` command.
+The gate lints with `ui-egui-glow`, runs one shipping `cargo nextest` suite
+(including repository policy), and runs CLI smokes against the `wd` built by
+nextest.
+Nextest does not run doctests, so the gate runs shipping doctests separately.
+It does not build a separate optimized binary.
 
-In CI, pull requests run four feature-matrix cells per OS: the test suite
-for `base` (no optional feature) and `shipping` (all of them), `clippy-glow`,
-and `features`, which runs `cargo check --all-targets` for each partial
-feature set the product supports alone (`rust-hotkeys`, `audio-capture`,
-`rust-hotkeys,rust-injection`, `whisper-rs-local,audio-capture,rust-injection`)
-and, on Linux, the tests gated on a partial set that neither `base` nor
-`shipping` compiles. Feature-gating breaks are caught before merge without a
-full test build per set. Push to
-`main` and the release validation run only the exact `shipping` profile and
-`clippy-glow` cells. The anchor cell (`base` on pull requests, `shipping`
-otherwise) owns rustfmt, the Windows native GUI smoke, and the Windows
-release-script fixture. Every nextest leg excludes the `repository_policy`
-test binary. The required `unit` job owns
-repository-policy tests and doctests, and the cross-platform `smoke` matrix
-owns `--help`, `--version`, and `config path`. The Ubuntu 26.04 compatibility
-job runs library, binary, and every non-policy integration-test target. Keep
-those owners separate so required contexts remain meaningful and the same
-validation is not rebuilt in multiple jobs.
+CI runs one full shipping test suite per operating system. Windows runs
+nextest directly, including the native GUI smoke and its exclusive nextest
+resource reservation. Linux runs nextest through `cargo llvm-cov` to produce
+the coverage report. The shipping cells reuse those built `wd` binaries for
+`--help`, `--version`, and `config path`. Linux shipping runs rustfmt once;
+Windows shipping also runs the release-script fixture. The required `smoke`
+contexts report the result of the Rust feature matrix without compiling
+anything separately. The required `unit` job owns repository-policy tests
+and doctests.
 
-On pull requests the Linux `audio` feature cell also builds the CLI and
-validates its 500 ms audio-capture self-test report. Only the explicit
-missing-input-device errors are skips. Build failures, panics, malformed
-reports, and an opened stream that delivers no samples fail the check. The
-Ubuntu 26.04 compatibility job uses the same checker on every event. Both
-Linux build environments declare `jq` for this report check; its fixture
-tests run in the ordinary Rust integration suite.
+The `clippy-glow` cell lints on both operating systems; the Linux invocation
+also produces the lint report. On pull requests, the `features` cell checks
+all targets with default features and with each supported partial feature set:
+`rust-hotkeys`, `audio-capture`, `rust-hotkeys,rust-injection`, and
+`whisper-rs-local,audio-capture,rust-injection`. It runs focused default-only
+regressions on both operating systems and a partial-set regression on Linux.
+These checks exercise feature gates without building a second full test suite.
+
+Optimized builds cover different risks. The Windows release build validates
+release CLI output and injection idempotency on Rust-relevant pull requests
+as well as on push and release validation. The Linux release build in
+`rust-release` checks linking on push to `main` and during release validation.
+The Ubuntu 26.04 compatibility job builds the locked, optimized shipping
+CLI once and runs `models list` and the push-to-talk, injection, audio
+capture, and tiny.en model-load checks directly against that executable.
+Packaged release validation remains separate.
+
+On pull requests the Linux shipping cell also validates the 500 ms
+audio-capture self-test report using its coverage-built CLI. The Ubuntu
+26.04 compatibility job uses the same checker. Only an explicit
+missing-input-device report is a skip; panics, malformed reports, and
+opened streams that deliver no samples fail the check. Both environments
+declare `jq`; report-checker fixture tests run in the shipping suite.
 
 To check the locked Rust dependency graph against RustSec advisories, install
 `cargo-audit` and run:
@@ -117,12 +124,6 @@ service is a failed or blocked verification, not a pass.
 The `cargo-outdated` workflow publishes a scheduled Monday report of outdated
 root dependencies. Review its output before updating FFI or system crates; it
 does not change dependencies automatically.
-
-For the CI-matched Linux matrix, use:
-
-```powershell
-pwsh scripts/dev/dev-check.ps1
-```
 
 ## Native CLI smoke checks
 
