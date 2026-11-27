@@ -409,6 +409,17 @@ section "models list (curated Whisper catalog)"
         info "$out"
     fi
 
+section "GPU memory for local speech models"
+if out="$(wd model-capacity 2>&1)" &&
+        grep -qE '^  (OK|FREE VRAM|NO) +Whisper large-v3-turbo +~[0-9]+ MiB' <<<"$out" &&
+        grep -qE '^  (OK|FREE VRAM|NO) +Whisper large-v3 +~[0-9]+ MiB' <<<"$out"; then
+    ok "reports local Whisper model fit without loading a model"
+else
+    bad "model-capacity did not report both Whisper model fits"
+    info "$out"
+fi
+warn "GPU status beside Start and the low-memory error are GUI checks. On a test GPU with too little free memory, save a local model and verify that Start is disabled. If memory runs low after startup, verify that the app reports a GPU memory error, not 'No speech detected'."
+
 # --------------------------------------------------------------------------
 # SECTION: devices test (mic-open probe against the system default)
 #

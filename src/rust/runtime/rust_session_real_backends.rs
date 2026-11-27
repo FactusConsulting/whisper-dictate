@@ -435,6 +435,8 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                     Arc::clone(&runtime_active),
                 )
                 .map_err(|error| format!("Nemotron in-process configuration: {error:#}"))?;
+                crate::dictate::backends::nemotron_local::check_gpu_capacity(&local_config)
+                    .map_err(|error| format!("Nemotron GPU capacity: {error:#}"))?;
                 let idle = runtime
                     .value(crate::whisper::IDLE_UNLOAD_ENV)
                     .map(crate::whisper::idle::parse_idle_timeout_str)

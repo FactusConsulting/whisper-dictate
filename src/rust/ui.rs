@@ -45,6 +45,7 @@ mod corpus_record;
 mod corpus_record_tasks;
 mod device_test;
 mod diagnostics_level;
+mod gpu_start;
 mod hotkey;
 mod hotkey_capture;
 #[cfg(test)]
@@ -321,6 +322,7 @@ struct WhisperDictateApp {
     app_version: String,
     selected_tab: Tab,
     runtime_state: RuntimeState,
+    gpu_start: gpu_start::GpuStartState,
     runtime_log: String,
     runtime_log_cache: RuntimeLogCache,
     runtime_log_scroll_to_bottom: bool,
@@ -625,6 +627,7 @@ impl Default for WhisperDictateApp {
             app_version: runtime::version(),
             selected_tab: Tab::Log,
             runtime_state: RuntimeState::Stopped,
+            gpu_start: gpu_start::GpuStartState::default(),
             runtime_log,
             runtime_log_cache,
             runtime_log_scroll_to_bottom: true,

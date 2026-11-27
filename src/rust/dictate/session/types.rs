@@ -84,13 +84,25 @@ pub struct TranscribeResult {
 }
 
 /// Errors a [`TranscribeBackend::transcribe`] call can surface. The
-/// session translates each into a no-text event with the matching
-/// `no_speech` reason token.
+/// session translates each into a no-text event with its reason token.
 #[derive(Debug, thiserror::Error)]
 pub enum TranscribeError {
     /// Model invocation itself failed (emitted as `reason="no_speech"`).
     #[error("transcribe backend error: {0}")]
     Backend(String),
+    /// A local speech model could not reserve enough free GPU memory.
+    #[error(transparent)]
+    GpuMemory(crate::model_capacity::GpuMemoryShortfall),
+}
+
+impl TranscribeError {
+    #[cfg(any(feature = "whisper-rs-local", feature = "nemotron-local"))]
+    pub(crate) fn from_backend_error(error: anyhow::Error) -> Self {
+        error
+            .downcast_ref::<crate::model_capacity::GpuMemoryShortfall>()
+            .copied()
+            .map_or_else(|| Self::Backend(format!("{error:#}")), Self::GpuMemory)
+    }
 }
 
 /// Backend boundary for transcription. Production impls live in

@@ -1,8 +1,11 @@
 //! Coverage for the session transcription boundary.
 
 use super::tests_support::*;
-use super::{SessionConfig, UtteranceOutcome};
+use super::{
+    SessionConfig, TranscribeBackend, TranscribeError, TranscribeResult, UtteranceOutcome,
+};
 use crate::dictate::feedback::CueKind;
+use crate::model_capacity::GpuMemoryShortfall;
 
 #[test]
 fn failed_transcription_still_emits_processing_done_cue() {
@@ -24,8 +27,7 @@ fn failed_transcription_still_emits_processing_done_cue() {
 
 #[test]
 fn transcribe_error_emits_no_text_no_speech() {
-    // Any model error surfaces
-    // as `reason="no_speech"` on the no-text event.
+    // Generic model errors retain the no-speech contract.
     let transcribe = TestTranscribe::returning_error("model panicked");
     let inject = TestInject::new();
     let (s, _, _guard) = session(transcribe, inject);
@@ -43,6 +45,36 @@ fn transcribe_error_emits_no_text_no_speech() {
         .collect();
     assert_eq!(no_text.len(), 1);
     assert_eq!(no_text[0]["reason"], "no_speech");
+}
+
+#[test]
+fn gpu_memory_shortfall_emits_actionable_no_text_error() {
+    struct LowGpuMemory(GpuMemoryShortfall);
+
+    impl TranscribeBackend for LowGpuMemory {
+        fn transcribe(&self, _: &[f32], _: u32) -> Result<TranscribeResult, TranscribeError> {
+            Err(TranscribeError::GpuMemory(self.0))
+        }
+    }
+
+    let shortfall = GpuMemoryShortfall {
+        required_mib: 4352,
+        free_mib: 1024,
+    };
+    let (s, _, _guard) = session(LowGpuMemory(shortfall), TestInject::new());
+    let (outcome, bytes, s) = run_one_utterance(s, &one_second_pcm());
+    assert!(matches!(
+        outcome,
+        UtteranceOutcome::NoText {
+            reason: "insufficient_gpu_memory"
+        }
+    ));
+    assert!(s.inject_backend().injected.borrow().is_empty());
+    let events = parse_events(&bytes);
+    let idx = events.iter().position(|e| e["state"] == "no_text").unwrap();
+    assert_eq!(events[idx]["reason"], "insufficient_gpu_memory");
+    assert_eq!(events[idx]["error"], shortfall.to_string());
+    assert_eq!(events[idx + 1]["state"], "ready");
 }
 
 #[test]

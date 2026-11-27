@@ -46,11 +46,16 @@ published Linux bundle and current Nix package do not enable Vulkan for
 Whisper. On Linux, build with `--features shipping-vulkan` for local Whisper,
 or choose a hosted endpoint with the published bundle.
 
-Settings checks total GPU memory to indicate which models can fit. A model
-can still fail to load if too little memory is free at runtime or the GPU
-cannot initialize it. The app reports the error rather than running on the
-CPU. The model is loaded lazily and can be released after an idle period with
-`VOICEPI_WHISPER_IDLE_UNLOAD_S`; the next utterance reloads it.
+Settings uses total GPU memory to decide which models to offer. After saving
+a local model, look next to **Start** for the estimated requirement and free
+memory on one GPU. If there is not enough free memory, choose a smaller model
+or explicitly select a hosted provider. The app checks again at startup and
+when allocating inference memory; another app can use that memory in the
+meantime. A shortfall is reported as a GPU memory error, not as missing speech.
+When NVIDIA also reports free physical memory for the adapter, the startup
+check uses the lower value rather than relying on Vulkan's process budget.
+Whisper never falls back to CPU. The model loads on first use and can be
+released after an idle period with `VOICEPI_WHISPER_IDLE_UNLOAD_S`.
 
 ### Danish Turbo and Danish Quality
 
@@ -110,6 +115,7 @@ managed library for the chosen accelerator.
 and is detected afresh for each utterance. The managed model requires
 at least 2 GiB of available GPU memory. Auto prefers Vulkan and can use
 CUDA on supported NVIDIA systems. It never starts a CPU recognizer.
+The **Start** memory check also applies to in-process Nemotron.
 **Test local model** checks GPU model loading without recording,
 transcribing audio, or using an API key.
 
@@ -225,6 +231,9 @@ neither checkpoint can load into whisper.cpp.
    start or restart dictation. No API key or custom URL is needed: the local
    preset uses only `http://127.0.0.1:18765`. It refuses to transcribe if the
    matching CUDA model is not loaded. `VOICEPI_LOCAL_ONLY=1` permits this route.
+   The status next to **Start** distinguishes a ready service from one you
+   still need to start. A service that already loaded the matching model
+   does not need the same amount of free memory again.
 
 Both presets transcribe in Danish. Local dictionary replacements still apply;
 the models do not receive a custom speech prompt. If you enable a hosted text

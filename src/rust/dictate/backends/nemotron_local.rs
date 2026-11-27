@@ -22,7 +22,9 @@ use super::nemotron_assets::{
 use super::nemotron_ffi::{NativeRecognizer, NativeRuntime};
 use super::profile_overrides::ProfileOverrideSlots;
 use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
-use crate::model_capacity::{query_gpus, vulkan::Adapters, GpuInfo};
+use crate::model_capacity::{
+    best_free_mib, query_gpus, vulkan::Adapters, GpuInfo, GpuMemoryShortfall,
+};
 use crate::whisper::device_options::nemotron_required_mib;
 use crate::whisper::IdleUnloadingModel;
 
@@ -182,7 +184,7 @@ impl TranscribeBackend for NemotronLocalTranscribeBackend {
                     &dictionary_terms,
                 )
             })
-            .map_err(|error| TranscribeError::Backend(format!("{error:#}")))?;
+            .map_err(TranscribeError::from_backend_error)?;
         let latency_ms = u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let (text, is_hallucination) =
             finalize_transcript(&result.text, duration_s, guards.max_chars_per_second);
@@ -323,6 +325,79 @@ impl DeviceRequest {
     }
 }
 
+pub(crate) fn gpu_memory(model: &str, device: &str) -> Result<(u32, Option<u32>)> {
+    gpu_memory_with(model, device, probe_free_mib)
+}
+
+fn gpu_memory_with(
+    model: &str,
+    device: &str,
+    probe: impl FnOnce(DeviceRequest, u32) -> Option<u32>,
+) -> Result<(u32, Option<u32>)> {
+    let device = DeviceRequest::parse(device)?;
+    let model = model.trim();
+    let path = model_path_for_request(model)?;
+    let required_mib = nemotron_required_mib(custom_model_size(model, &path)?);
+    Ok((required_mib, probe(device, required_mib)))
+}
+
+fn probe_free_mib(device: DeviceRequest, required_mib: u32) -> Option<u32> {
+    probe_free_mib_with(
+        device,
+        required_mib,
+        driver_enabled,
+        Adapters::probe,
+        query_gpus,
+    )
+}
+
+fn probe_free_mib_with(
+    device: DeviceRequest,
+    required_mib: u32,
+    enabled: impl Fn(Accelerator) -> bool,
+    probe_vulkan: impl Fn() -> Adapters,
+    query_nvidia: impl Fn() -> Vec<GpuInfo>,
+) -> Option<u32> {
+    let nvidia = std::cell::OnceCell::new();
+    let query = || nvidia.get_or_init(&query_nvidia);
+    device
+        .candidates()
+        .into_iter()
+        .flatten()
+        .filter(|&accel| accel.available() && enabled(accel))
+        .filter_map(|accel| match accel {
+            Accelerator::Vulkan => probe_vulkan()
+                .with_nvidia_free_limit(query)
+                .best_free_mib(required_mib),
+            Accelerator::Cuda => cuda_best_free_mib(query(), required_mib),
+        })
+        .max()
+}
+
+#[cfg(native_session)]
+pub(crate) fn check_gpu_capacity(config: &NemotronLocalBackendConfig) -> Result<()> {
+    check_gpu_capacity_with(config, probe_free_mib)
+}
+
+#[cfg(any(native_session, test))]
+fn check_gpu_capacity_with(
+    config: &NemotronLocalBackendConfig,
+    probe: impl FnOnce(DeviceRequest, u32) -> Option<u32>,
+) -> Result<()> {
+    let required_mib = nemotron_required_mib(custom_model_size(
+        &config.model_request,
+        &config.model_path,
+    )?);
+    let free_mib = probe(config.device, required_mib);
+    match free_mib {
+        Some(free_mib) if free_mib >= required_mib => Ok(()),
+        Some(free_mib) => Err(GpuMemoryShortfall { required_mib, free_mib }.into()),
+        None => anyhow::bail!(
+            "Local Nemotron needs a supported GPU with at least {required_mib} MiB. Choose a smaller local model or a hosted speech provider."
+        ),
+    }
+}
+
 enum GpuCapacity {
     Vulkan(Adapters),
     Cuda(Vec<GpuInfo>),
@@ -331,17 +406,15 @@ enum GpuCapacity {
 impl GpuCapacity {
     fn probe(accelerator: Accelerator) -> Self {
         match accelerator {
-            Accelerator::Vulkan => Self::Vulkan(Adapters::probe()),
+            Accelerator::Vulkan => Self::Vulkan(Adapters::probe_for_model_load(query_gpus)),
             Accelerator::Cuda => Self::Cuda(query_gpus()),
         }
     }
 
-    fn has_capacity(&self, required_mib: u32) -> bool {
+    fn best_free_mib(&self, required_mib: u32) -> Option<u32> {
         match self {
-            Self::Vulkan(adapters) => adapters.has_capacity(required_mib),
-            Self::Cuda(gpus) => gpus
-                .iter()
-                .any(|gpu| gpu.total_mb >= required_mib && gpu.free_mb >= required_mib),
+            Self::Vulkan(adapters) => adapters.best_free_mib(required_mib),
+            Self::Cuda(gpus) => cuda_best_free_mib(gpus, required_mib),
         }
     }
 
@@ -351,6 +424,13 @@ impl GpuCapacity {
             Self::Cuda(gpus) => cuda_capacity(gpus, description.to_bytes()),
         }
     }
+}
+
+fn cuda_best_free_mib(gpus: &[GpuInfo], required_mib: u32) -> Option<u32> {
+    best_free_mib(
+        gpus.iter().map(|gpu| (gpu.total_mb, gpu.free_mb)),
+        required_mib,
+    )
 }
 
 /// Maximum total memory among devices the pinned local runtime can try.
@@ -444,6 +524,7 @@ fn load_recognizer_with<R, T>(
     let required_mib =
         nemotron_required_mib(custom_model_size(&config.model_request, &planned_model)?);
     let mut failure = None;
+    let mut best_free = None;
     for accelerator in config.device.candidates().into_iter().flatten() {
         if !config.runtime_active.load(Ordering::Acquire) {
             anyhow::bail!("loading local Nemotron was cancelled because the runtime stopped");
@@ -452,7 +533,11 @@ fn load_recognizer_with<R, T>(
             continue;
         }
         let capacity = probe(accelerator);
-        if !capacity.has_capacity(required_mib) {
+        let Some(free_mib) = capacity.best_free_mib(required_mib) else {
+            continue;
+        };
+        best_free = best_free.max(Some(free_mib));
+        if free_mib < required_mib {
             continue;
         }
         let runtime = load_runtime(accelerator).and_then(|runtime| {
@@ -477,6 +562,19 @@ fn load_recognizer_with<R, T>(
         let required_mib =
             nemotron_required_mib(custom_model_size(&config.model_request, &model_path)?);
         let capacity = probe(accelerator);
+        if let Some(free_mib) = capacity
+            .best_free_mib(required_mib)
+            .filter(|&free| free < required_mib)
+        {
+            failure = Some(
+                GpuMemoryShortfall {
+                    required_mib,
+                    free_mib,
+                }
+                .into(),
+            );
+            continue;
+        }
         let recognizer = select_gpu(&runtime, required_mib, &capacity).and_then(|gpu| {
             create(runtime, &model_path, gpu).with_context(|| {
                 format!(
@@ -495,9 +593,14 @@ fn load_recognizer_with<R, T>(
             "local Nemotron requires a verified GPU runtime and one GPU with at least {required_mib} MiB total and free VRAM; choose a hosted speech provider if no suitable GPU is available"
         )
     };
-    match failure {
-        Some(error) => Err(error).with_context(message),
-        None => Err(anyhow::anyhow!(message())),
+    match (failure, best_free) {
+        (Some(error), _) => Err(error).with_context(message),
+        (None, Some(free_mib)) if free_mib < required_mib => Err(GpuMemoryShortfall {
+            required_mib,
+            free_mib,
+        }
+        .into()),
+        (None, _) => Err(anyhow::anyhow!(message())),
     }
 }
 

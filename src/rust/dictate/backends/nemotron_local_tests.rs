@@ -294,7 +294,7 @@ fn cuda_capacity_cannot_be_combined_across_adapters() {
             source: "nvidia-smi",
         },
     ]);
-    assert!(!capacity.has_capacity(2048));
+    assert_eq!(capacity.best_free_mib(2048), Some(1800));
 }
 
 #[test]

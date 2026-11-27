@@ -493,6 +493,18 @@ fn no_text_card(line: &str) -> Option<RuntimeLogCard> {
     // extract_metric_token returns the full "key=value" token; strip the prefix.
     let reason_token = extract_metric_token(rest, "reason=").unwrap_or("reason=empty");
     let reason = reason_token.strip_prefix("reason=").unwrap_or("empty");
+    if reason == "insufficient_gpu_memory" {
+        let detail = rest
+            .split_once(" error=")
+            .map(|(_, error)| error)
+            .unwrap_or("Free GPU memory, choose a smaller model, or use a hosted provider.");
+        return Some(RuntimeLogCard {
+            kind: RuntimeLogCardKind::Status,
+            title: "Not enough free GPU memory".to_owned(),
+            detail: detail.to_owned(),
+            badge: "GPU memory".to_owned(),
+        });
+    }
     let title = match reason {
         "no_audio" => "No audio captured",
         "too_short" => "Too short — hold the key while speaking",

@@ -133,6 +133,7 @@ impl WhisperDictateApp {
                     self.settings.stt_model.clear();
                 }
                 self.saved_settings = self.settings.clone();
+                self.gpu_start.refresh_selection();
                 self.explicit_nullable_clears.clear();
                 self.settings_status = format!("Saved settings: {}", path.display());
                 self.append_runtime_log(format!("[ui] settings saved: {}", path.display()));
@@ -222,6 +223,7 @@ impl WhisperDictateApp {
             Ok(settings) => {
                 self.explicit_nullable_clears.clear();
                 self.saved_settings = settings.clone();
+                self.gpu_start.refresh_selection();
                 self.runtime_log_view = LogViewMode::from_raw(&settings.ui_log_view);
                 self.settings = settings;
                 // The reloaded config may have switched settings mode (e.g. a

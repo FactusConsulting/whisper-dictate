@@ -17,6 +17,27 @@ pub(crate) struct SpeechGpu {
     pub free_mib: u32,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error(
+    "Not enough free GPU memory: need {required_mib} MiB, have {free_mib} MiB. Try a smaller local model or a hosted speech provider."
+)]
+pub struct GpuMemoryShortfall {
+    pub required_mib: u32,
+    pub free_mib: u32,
+}
+
+pub(crate) mod start;
+
+pub(crate) fn best_free_mib(
+    capacities: impl Iterator<Item = (u32, u32)>,
+    required_mib: u32,
+) -> Option<u32> {
+    capacities
+        .filter(|&(total, _)| total >= required_mib)
+        .map(|(total, free)| free.min(total))
+        .max()
+}
+
 /// Estimate the space for weights plus compute, state, and driver buffers
 /// from the actual GGML file length, not its filename or selected preset.
 pub(crate) fn whisper_required_mib(file_bytes: u64) -> u32 {
@@ -43,10 +64,22 @@ pub(crate) fn select_whisper_gpu(gpus: &[SpeechGpu], required_mib: u32) -> Optio
         .map(|gpu| gpu.index)
 }
 
+#[cfg(any(feature = "whisper-rs-local", test))]
 pub(crate) fn whisper_gpus() -> Vec<SpeechGpu> {
     #[cfg(feature = "whisper-rs-vulkan")]
     {
         vulkan::Adapters::probe().whisper_gpus()
+    }
+    #[cfg(not(feature = "whisper-rs-vulkan"))]
+    {
+        Vec::new()
+    }
+}
+
+pub(crate) fn whisper_gpus_for_model_load() -> Vec<SpeechGpu> {
+    #[cfg(feature = "whisper-rs-vulkan")]
+    {
+        vulkan::Adapters::probe_for_model_load(query_gpus).whisper_gpus()
     }
     #[cfg(not(feature = "whisper-rs-vulkan"))]
     {
@@ -143,14 +176,21 @@ pub struct ModelFitReport {
 }
 
 pub fn handle_command(json: bool) -> Result<()> {
-    let mut gpus = query_gpus();
-    gpus.extend(whisper_gpus().into_iter().map(|gpu| GpuInfo {
-        index: gpu.index as usize,
-        name: "Whisper Vulkan adapter".to_owned(),
-        total_mb: gpu.total_mib,
-        free_mb: gpu.free_mib,
-        source: WHISPER_VULKAN_SOURCE,
-    }));
+    let gpus = query_gpus();
+    #[cfg(feature = "whisper-rs-vulkan")]
+    let gpus = {
+        let mut gpus = gpus;
+        let mut adapters = vulkan::Adapters::probe();
+        adapters.limit_nvidia_free_mib(&gpus);
+        gpus.extend(adapters.whisper_gpus().into_iter().map(|gpu| GpuInfo {
+            index: gpu.index as usize,
+            name: "Whisper Vulkan adapter".to_owned(),
+            total_mb: gpu.total_mib,
+            free_mb: gpu.free_mib,
+            source: WHISPER_VULKAN_SOURCE,
+        }));
+        gpus
+    };
     if json {
         println!("{}", serde_json::to_string(&capacity_report_json(&gpus))?);
     } else {
@@ -160,20 +200,24 @@ pub fn handle_command(json: bool) -> Result<()> {
 }
 
 pub fn query_gpus() -> Vec<GpuInfo> {
-    let mut command = Command::new("nvidia-smi");
-    command.args([
-        "--query-gpu=index,name,memory.total,memory.free",
-        "--format=csv,noheader,nounits",
-    ]);
-    crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
-    let output = command.output();
-    let Ok(output) = output else {
+    let output = nvidia_smi("--query-gpu=index,name,memory.total,memory.free");
+    let Some(output) = output else {
         return Vec::new();
     };
-    if !output.status.success() {
-        return Vec::new();
-    }
-    parse_nvidia_smi_csv(&String::from_utf8_lossy(&output.stdout))
+    parse_nvidia_smi_csv(&String::from_utf8_lossy(&output))
+}
+
+fn nvidia_smi(fields: &str) -> Option<Vec<u8>> {
+    #[cfg(windows)]
+    use std::os::windows::process::CommandExt as _;
+
+    let mut command = Command::new("nvidia-smi");
+    command.args([fields, "--format=csv,noheader,nounits"]);
+    #[cfg(windows)]
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    crate::runtime::settings_snapshot::scrub_credentials_from_child(&mut command);
+    let output = command.output().ok()?;
+    output.status.success().then_some(output.stdout)
 }
 
 pub fn estimate_model_fits(gpus: &[GpuInfo]) -> Vec<ModelFit> {

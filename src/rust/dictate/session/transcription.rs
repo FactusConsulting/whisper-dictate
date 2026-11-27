@@ -53,18 +53,22 @@ impl<T: TranscribeBackend, I: InjectBackend> DictateSession<T, I> {
         let mut result = match self.transcribe.transcribe(buf, SR) {
             Ok(result) => result,
             Err(err) => {
+                let reason = match &err {
+                    TranscribeError::GpuMemory(_) => "insufficient_gpu_memory",
+                    TranscribeError::Backend(_) => "no_speech",
+                };
                 wire::emit_status_with_output(
                     writer,
                     "no_text",
                     &[
-                        ("reason", Value::from("no_speech")),
+                        ("reason", Value::from(reason)),
                         ("error", Value::from(err.to_string())),
                         ("recording_s", recording_s.clone()),
                     ],
                     self.worker_event_output,
                 )?;
                 return Ok(TranscriptDecision::Rejected(UtteranceOutcome::NoText {
-                    reason: "no_speech",
+                    reason,
                 }));
             }
         };

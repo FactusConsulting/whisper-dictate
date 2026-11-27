@@ -206,14 +206,28 @@ impl WhisperDictateApp {
                         .color(color)
                         .strong(),
                 );
-                let message = self.status_bar_message();
+                let runtime_error = self
+                    .last_runtime_error
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|error| !error.is_empty());
+                let (message, message_color) = if let Some(error) = runtime_error {
+                    (std::borrow::Cow::Borrowed(error), palette.error_text)
+                } else {
+                    (
+                        std::borrow::Cow::Owned(self.status_bar_message()),
+                        palette.text_muted,
+                    )
+                };
                 if !message.is_empty() {
                     ui.label(egui::RichText::new("·").color(palette.text_muted));
                     ui.add(
-                        egui::Label::new(egui::RichText::new(&message).color(palette.text_muted))
-                            .truncate(),
+                        egui::Label::new(
+                            egui::RichText::new(message.as_ref()).color(message_color),
+                        )
+                        .truncate(),
                     )
-                    .on_hover_text(&message);
+                    .on_hover_text(message.as_ref());
                 }
             },
         );
@@ -421,19 +435,8 @@ impl WhisperDictateApp {
         {
             self.stop_runtime();
         }
-        if ui
-            .add_enabled(
-                is_stopped && self.nemotron_probe_active.is_none(),
-                egui::Button::new(
-                    icon_text(
-                        icons::ICON_PLAY_ARROW.codepoint,
-                        ui_text(&self.settings.ui_language, UiTextKey::Start),
-                    )
-                    .strong(),
-                )
-                .fill(palette.accent_dark)
-                .min_size(egui::vec2(88.0, 34.0)),
-            )
+        if self
+            .manual_start_button(ui, palette, egui::vec2(88.0, 34.0))
             .clicked()
         {
             self.start_runtime();
