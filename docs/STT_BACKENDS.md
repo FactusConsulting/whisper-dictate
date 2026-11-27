@@ -9,6 +9,7 @@ in-process runtime and Riva gRPC endpoints.
 |---|---|---|---|
 | Local Whisper | `whisper` | _(not used)_ | Use a Vulkan-capable build and GPU, select a model that fits, and optionally set `VOICEPI_WHISPER_MODEL_PATH`. |
 | In-process Nemotron 3.5 ASR | `openai` | `nemotron` | Use `inproc://nemotron` and a supported GPU. The app downloads and verifies the official NeMo-Speech.cpp runtime and model. No API key, Docker, or server is needed. |
+| Local Hviske v5.3 and v6 | `openai` | `custom` | Start the [local CUDA service](#run-hviske-on-this-pc) and select a local GPU preset in Speech Settings. No API key is needed. |
 | OpenAI | `openai` | `openai` | Set the OpenAI base URL, model, and API key. |
 | Groq | `openai` | `groq` | Set `https://api.groq.com/openai/v1`, a supported Whisper model, and a Groq API key. |
 | Custom OpenAI-compatible endpoint | `openai` | `custom` | Set the endpoint URL, the model name expected by that server, and its API key. |
@@ -21,8 +22,8 @@ prompt limit, and provenance label.
 
 ## When local transcription is unavailable
 
-Local Whisper and in-process Nemotron require a supported GPU. Neither falls
-back to CPU or switches to a hosted provider if it cannot load or run. If your
+Local Whisper, in-process Nemotron, and local Hviske require a supported GPU.
+None falls back to CPU or switches to a hosted provider. If your
 GPU cannot fit the chosen model, close other GPU-heavy apps and retry or choose
 a smaller supported model, if one is available. If you do not have a suitable
 GPU, consider a [hosted provider](#cloud-providers) that supports your language.
@@ -179,10 +180,57 @@ valid URL for this application's Nemotron streaming client.
 
 ### Third-party Hviske models
 
-In **Speech → Cloud STT → Custom**, select **Hviske v5.3** or **Hviske v6**.
-The app shows the license and audio-routing notice before changing the model.
+In **Speech → Cloud STT → Custom**, choose a **Hosted or external** or a
+**Run on this PC** preset. The app shows a license and audio-routing notice
+before changing the model.
 The published weights are [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/).
 For commercial use, [contact syv.ai](https://syv.ai/kontakt).
+
+#### Run Hviske on this PC
+
+The local choices appear only when the app detects an NVIDIA GPU with native
+BF16 support (compute capability 8.0 or newer) and enough total VRAM for that
+model. v6 needs at least 3.5 GiB, and v5.3 needs at least 6 GiB, on one GPU.
+The service checks that there is enough **free** VRAM before loading. A
+Vulkan-only GPU cannot run these presets. Although v6 uses a Whisper encoder,
+neither checkpoint can load into whisper.cpp.
+
+1. Download the source archive for your Whisper Dictate release and open a
+   terminal in the extracted source directory. Use a Python virtual environment
+   with Python 3.13 and the correct NVIDIA driver. These dependency commands were
+   used on Windows with a CUDA 12.8 wheel; use the
+   [PyTorch installer selector](https://pytorch.org/get-started/locally/)
+   if your platform requires a different CUDA build. Do not install a CPU wheel.
+
+   ```sh
+   python -m pip install --index-url https://download.pytorch.org/whl/cu128 torch==2.10.0
+   python -m pip install "transformers==4.57.6" accelerate librosa soundfile sentencepiece protobuf
+   ```
+
+2. If you accept the noncommercial license, start the service and leave the
+   terminal open:
+
+   ```sh
+   python scripts/hviske/service.py --model syvai/hviske-v6 --accept-noncommercial
+   ```
+
+   Replace the model ID with `syvai/hviske-v5.3` to run v5.3. Run one variant
+   at a time. The first start downloads the pinned weights and model code
+   anonymously. The service runs that code at the pinned revision. Add
+   `--offline` after the download to use only the local cache. If necessary,
+   `--cuda-device N` selects a specific visible CUDA device.
+
+3. In **Speech → Cloud STT → Custom → Run on this PC**, choose the matching
+   model and accept the notice. Click **Test local GPU service**, save, and
+   start or restart dictation. No API key or custom URL is needed: the local
+   preset uses only `http://127.0.0.1:18765`. It refuses to transcribe if the
+   matching CUDA model is not loaded. `VOICEPI_LOCAL_ONLY=1` permits this route.
+
+Both presets transcribe in Danish. Local dictionary replacements still apply;
+the models do not receive a custom speech prompt. If you enable a hosted text
+post-processor, that is a separate route that can send the transcript off-device.
+
+#### Use a hosted or external Hviske server
 
 Run the model in a separate GPU-backed server that accepts
 `POST /v1/audio/transcriptions` and returns JSON with a `text` field. See

@@ -13,6 +13,7 @@ mod check_nemotron;
 mod grpc;
 pub(crate) mod grpc_transcribe;
 pub(crate) mod http;
+pub(crate) mod hviske_local;
 mod prompts;
 mod transcribe;
 
@@ -44,5 +45,7 @@ pub(crate) const HVISKE_V6: &str = "syvai/hviske-v6";
 
 pub(crate) fn is_hviske_model(model: &str) -> bool {
     let model = model.trim();
-    model.eq_ignore_ascii_case(HVISKE_V53) || model.eq_ignore_ascii_case(HVISKE_V6)
+    model.eq_ignore_ascii_case(HVISKE_V53)
+        || model.eq_ignore_ascii_case(HVISKE_V6)
+        || hviske_local::LocalModel::from_alias(model).is_some()
 }

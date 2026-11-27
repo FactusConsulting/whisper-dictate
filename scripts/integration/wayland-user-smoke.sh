@@ -531,6 +531,29 @@ else
     rmdir "$transcribe_file_smoke_dir"
 fi
 
+section "Local Hviske (optional real CUDA speech)"
+if [[ -z ${WD_HVISKE_MODEL:-} && -z ${WD_HVISKE_WAV:-} ]]; then
+    warn "start a local model and set WD_HVISKE_MODEL and WD_HVISKE_WAV to exercise CUDA"
+elif [[ ( ${WD_HVISKE_MODEL:-} != syvai/hviske-v5.3 && ${WD_HVISKE_MODEL:-} != syvai/hviske-v6 ) ||
+        ! -f ${WD_HVISKE_WAV:-} ]] || ! command -v jq >/dev/null; then
+    bad "local Hviske smoke needs v5.3 or v6 model ID, a Danish WAV file, and jq"
+else
+    hviske_tmp="$(mktemp -d)"
+    if env -u VOICEPI_STT_API_KEY \
+        VOICEPI_CONFIG="$hviske_tmp/config.json" VOICEPI_LOCAL_ONLY=1 \
+        VOICEPI_STT_BACKEND=openai VOICEPI_STT_MODEL="local:$WD_HVISKE_MODEL" \
+        VOICEPI_STT_BASE_URL=http://127.0.0.1:1/v1 VOICEPI_POST_PROCESSOR=none \
+        wd transcribe-file "$WD_HVISKE_WAV" --json > "$hviske_tmp/result.json" &&
+        jq -e --arg model "local:$WD_HVISKE_MODEL" \
+            '.stt_impl == "local-hviske" and .stt_accel == "cuda" and .language == "da" and .model == $model and (.text | length > 0)' \
+            "$hviske_tmp/result.json" >/dev/null; then
+        ok "local Hviske transcribed Danish on CUDA without a cloud URL or key"
+    else
+        bad "local Hviske did not return a Danish transcript with CUDA provenance"
+    fi
+    rm -rf "$hviske_tmp"
+fi
+
 # --------------------------------------------------------------------------
 # SECTION: config get/set (persistence roundtrip)
 #

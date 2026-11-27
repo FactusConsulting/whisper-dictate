@@ -1,4 +1,5 @@
 use super::{egui, WhisperDictateApp};
+use crate::cloud_api::hviske_local::LocalModel;
 use crate::ui::{test_support::test_app, AppSettings};
 
 fn collect_text(shape: &egui::Shape, painted: &mut Vec<(String, egui::Pos2)>) {
@@ -89,4 +90,51 @@ fn hviske_model_changes_only_after_accepting_the_license_and_audio_notice() {
     click(&ctx, &mut app, "Use model");
     assert_eq!(app.settings.stt_model, crate::cloud_api::HVISKE_V6);
     assert_eq!(app.settings.stt_base_url, "http://localhost:8000/v1");
+}
+
+#[test]
+fn local_hviske_presets_require_a_fitting_cuda_gpu_and_the_license_notice() {
+    let ctx = egui::Context::default();
+    let mut app = test_app(AppSettings {
+        stt_backend: "openai".to_owned(),
+        stt_provider: "custom".to_owned(),
+        stt_model: "existing-custom-model".to_owned(),
+        stt_base_url: "https://untouched.example/v1".to_owned(),
+        ..AppSettings::default()
+    });
+    let labels = frame(&ctx, &mut app, Vec::new());
+    assert!(labels.iter().any(|(text, _)| text == "Hviske v6"));
+    assert!(labels.iter().all(|(text, _)| !text.contains("local GPU")));
+
+    app.hviske_gpu_total_mib = Some(LocalModel::V6.required_mib());
+    let labels = frame(&ctx, &mut app, Vec::new());
+    assert!(labels
+        .iter()
+        .any(|(text, _)| text == "Hviske v6 (local GPU)"));
+    assert!(labels
+        .iter()
+        .all(|(text, _)| text != "Hviske v5.3 (local GPU)"));
+
+    click(&ctx, &mut app, "Hviske v6 (local GPU)");
+    assert_eq!(app.settings.stt_model, "existing-custom-model");
+    let notice = frame(&ctx, &mut app, Vec::new());
+    for required in [
+        "Use Hviske v6 (local GPU)?",
+        "Audio stays on this PC",
+        "no CPU fallback",
+    ] {
+        assert!(notice.iter().any(|(text, _)| text.contains(required)));
+    }
+    click(&ctx, &mut app, "Use model");
+    assert_eq!(app.settings.stt_model, LocalModel::V6.alias());
+    assert_eq!(app.settings.stt_base_url, "https://untouched.example/v1");
+    assert!(!app.cloud_stt_missing_api_key());
+    assert!(!app.settings.local_only);
+
+    app.hviske_gpu_total_mib = None;
+    let labels = frame(&ctx, &mut app, Vec::new());
+    assert!(labels
+        .iter()
+        .any(|(text, _)| text.starts_with("Unavailable:")));
+    assert!(!app.local_hviske_can_test());
 }

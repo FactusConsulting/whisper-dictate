@@ -305,14 +305,19 @@ pub(crate) fn build_cloud_backend(
             "cloud transcription requires a configured stt_model"
         ));
     }
-    if config.api_key.trim().is_empty() && !crate::privacy::is_loopback_url(config.base_url.trim())
+    let local_hviske = crate::cloud_api::hviske_local::LocalModel::from_alias(&config.model);
+    if local_hviske.is_none()
+        && config.api_key.trim().is_empty()
+        && !crate::privacy::is_loopback_url(config.base_url.trim())
     {
         return Err(anyhow!(
             "cloud transcription requires a saved API key or \
              VOICEPI_STT_API_KEY/GROQ_API_KEY/OPENAI_API_KEY"
         ));
     }
-    config.prompt = prompt_for(dictionary, config.prompt.as_deref());
+    if !crate::cloud_api::is_hviske_model(&config.model) {
+        config.prompt = prompt_for(dictionary, config.prompt.as_deref());
+    }
     cloud_backend_local_only_checked_with_provider(local_only, config, provider)
         .map_err(|error| anyhow!("cloud backend rejected: {error}"))
 }

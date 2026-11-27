@@ -58,7 +58,7 @@ use super::{
 };
 use crate::corpus::{corpus_search_paths, load_corpus, resolve_corpus_manifest, CorpusItem};
 use crate::dictate::backends::cloud_transcribe::{
-    cloud_backend_local_only_checked_with_provider, CloudTranscribeConfig,
+    cloud_backend_local_only_checked_with_provider, CloudTranscribeConfig, STT_MODEL_ENV,
 };
 use crate::dictate::backends::CloudTranscribeBackend;
 use crate::dictate::{TranscribeBackend, TranscribeResult};
@@ -237,7 +237,7 @@ pub fn run_with_writer(
         // and then produces N failed rows before exit. Validate here so
         // the user sees the failure before touching any audio.
         if spec.backend == "openai" {
-            let cloud_cfg = CloudTranscribeConfig::from_env_with(&lookup);
+            let cloud_cfg = cloud_config_for_spec(spec, &lookup);
             if cloud_cfg.api_key.is_empty()
                 && !crate::privacy::is_loopback_url(cloud_cfg.base_url.trim())
                 && !crate::cloud_api::is_nemotron_in_process_endpoint(&cloud_cfg.base_url)
@@ -378,6 +378,19 @@ fn apply_language_via_profile<B: TranscribeBackend + ?Sized>(backend: &B, langua
     backend.apply_profile_overrides(&overrides);
 }
 
+fn cloud_config_for_spec(
+    spec: &BackendSpec,
+    lookup: &impl Fn(&str) -> Option<String>,
+) -> CloudTranscribeConfig {
+    CloudTranscribeConfig::from_env_with(|name| {
+        if name == STT_MODEL_ENV {
+            spec.model.clone().or_else(|| lookup(name))
+        } else {
+            lookup(name)
+        }
+    })
+}
+
 fn build_backend<F>(
     spec: &BackendSpec,
     lookup: &F,
@@ -389,14 +402,7 @@ where
 {
     match spec.backend.as_str() {
         "openai" => {
-            let mut config = CloudTranscribeConfig::from_env_with(lookup);
-            // Per-spec model override — `spec.model`. We apply it directly
-            // to `config.model` since cloud reads from `VOICEPI_STT_MODEL`
-            // in production; the spec model is the caller's explicit
-            // choice so it wins over env.
-            if let Some(model) = &spec.model {
-                config.model = model.clone();
-            }
+            let mut config = cloud_config_for_spec(spec, lookup);
             // The in-process URI is authoritative even for upgraded configs
             // that predate the persisted `stt_provider` field. AppSettings and
             // transcribe-file infer the same providerless shape, so benchmark
@@ -426,7 +432,9 @@ where
             // the live session would send. Static fold (not
             // `with_reloading_prompt`) — the dictionary is loaded once
             // per bench run and does not need mid-run reloads.
-            dictionary.fold_into_prompt(&mut config.prompt);
+            if !crate::cloud_api::is_hviske_model(&config.model) {
+                dictionary.fold_into_prompt(&mut config.prompt);
+            }
             // enforce the local-only privacy lock
             // BEFORE constructing the backend. The direct constructor
             // would silently POST corpus audio to a remote endpoint when

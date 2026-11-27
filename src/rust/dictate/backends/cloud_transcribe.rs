@@ -7,6 +7,8 @@
 //! [`crate::cloud_api::cloud_transcribe`], so cloud STT needs **no local
 //! model or GPU** -- reading the same `VOICEPI_STT_*` settings the worker
 //! command exports.
+//! The on-this-PC Hviske aliases use the same WAV encoder but route to a
+//! fixed CUDA loopback service instead of the hosted multipart API.
 //!
 //! Stock (no cargo feature): `cloud_api` (ureq) + `hound` (WAV) are both
 //! unconditional deps, so this compiles and is unit-tested on every build.
@@ -21,9 +23,9 @@ use std::time::Instant;
 use super::hallucination::max_chars_per_second_from_env;
 use super::hallucination::{is_hallucination, speech_rate_exceeded, TranscriptionGuards};
 use super::profile_overrides::ProfileOverrideSlots;
+use crate::cloud_api::hviske_local::{self, LocalModel};
 use crate::cloud_api::{
-    cloud_transcribe, cloud_transcribe_for_provider, CloudTranscriptionRequest,
-    CloudTranscriptionResult,
+    cloud_transcribe_for_provider, CloudTranscriptionRequest, CloudTranscriptionResult,
 };
 use crate::dictate::{TranscribeBackend, TranscribeError, TranscribeResult};
 
@@ -244,8 +246,23 @@ impl CloudTranscribeConfig {
                 .map(|v| v.trim().to_owned())
                 .filter(|v| !v.is_empty())
         };
-        let base_url = get(STT_BASE_URL_ENV).unwrap_or_else(|| DEFAULT_STT_BASE_URL.to_owned());
+        let timeout_ms = get(STT_TIMEOUT_MS_ENV)
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|v| v.is_finite())
+            .map(|v| (v.trunc().max(0.0) as u64).max(STT_TIMEOUT_MIN_MS))
+            .unwrap_or(DEFAULT_STT_TIMEOUT_MS);
         let model = get(STT_MODEL_ENV).unwrap_or_default();
+        if let Some(local_model) = LocalModel::from_alias(&model) {
+            return Self {
+                base_url: hviske_local::BASE_URL.to_owned(),
+                api_key: String::new(),
+                model: local_model.alias().to_owned(),
+                timeout_ms,
+                language: Some(hviske_local::LANGUAGE.to_owned()),
+                prompt: None,
+            };
+        }
+        let base_url = get(STT_BASE_URL_ENV).unwrap_or_else(|| DEFAULT_STT_BASE_URL.to_owned());
         let api_key = if provider.trim().eq_ignore_ascii_case("nemotron")
             || is_nemotron_model_alias(&model)
         {
@@ -253,11 +270,6 @@ impl CloudTranscribeConfig {
         } else {
             crate::cloud_api::resolve_api_key_with("", &base_url, &lookup)
         };
-        let timeout_ms = get(STT_TIMEOUT_MS_ENV)
-            .and_then(|v| v.parse::<f64>().ok())
-            .filter(|v| v.is_finite())
-            .map(|v| (v.trunc().max(0.0) as u64).max(STT_TIMEOUT_MIN_MS))
-            .unwrap_or(DEFAULT_STT_TIMEOUT_MS);
         Self {
             base_url,
             api_key,
@@ -284,10 +296,8 @@ pub fn cloud_backend_requested_from_env() -> bool {
 /// Under `local_only`, a remote
 /// (`openai`/Groq) STT backend is refused so microphone audio never
 /// leaves the machine -- EXCEPT when the configured `base_url` is a
-/// loopback endpoint (a self-hosted server on `localhost`/`127.0.0.1`
-/// never leaves the box), which stays allowed. The Rust in-process
-/// session previously had no such check, so `VOICEPI_LOCAL_ONLY=1` +
-/// `stt_backend=openai` would still POST audio remotely.
+/// loopback endpoint. On-this-PC Hviske ignores that setting and requires a
+/// successful health check at its fixed loopback address before starting.
 ///
 /// Returns the human-readable rejection message on a blocked backend so
 /// [`crate::runtime::rust_session_real_backends::make_real_session_with_activity_and_settings`]
@@ -315,6 +325,13 @@ pub fn cloud_backend_local_only_checked_with_provider(
     config: CloudTranscribeConfig,
     provider: &str,
 ) -> Result<CloudTranscribeBackend, String> {
+    if let Some(model) = LocalModel::from_alias(&config.model) {
+        hviske_local::require_custom_provider(provider).map_err(|e| format!("{e:#}"))?;
+        hviske_local::ensure_ready(model).map_err(|e| format!("{e:#}"))?;
+        let mut backend = CloudTranscribeBackend::new_with_provider(config, provider);
+        backend.hviske_ready = true;
+        return Ok(backend);
+    }
     crate::privacy::assert_local_backend(
         local_only,
         STT_BACKEND_CLOUD,
@@ -368,12 +385,9 @@ pub fn encode_wav_mono_16bit(pcm: &[f32], sample_rate: u32) -> Result<Vec<u8>, S
 /// so a leading space would otherwise defeat it — mirroring the local
 /// path's `normalize_whitespace` pre-step.
 ///
-/// `stt_impl` is the provider label resolved from the configured base URL
-/// (`cloud-openai` / `cloud-groq`) and is passed in rather than sniffed
-/// here so this stays a pure mapping function. `stt_accel` is fixed at
-/// `unknown`: the compute path is the provider's business and nothing in
-/// the response reveals it -- claiming `cpu` or a GPU would be the exact
-/// kind of guess the provenance fields exist to eliminate.
+/// Pass in the provider and accelerator labels after the transport returns:
+/// hosted responses do not reveal their accelerator, while verified local
+/// Hviske responses prove the service used CUDA.
 ///
 /// `requested_language` is the language the request ASKED the endpoint to
 /// transcribe in; see the `language` resolution below for why the result has
@@ -392,7 +406,7 @@ fn map_cloud_result(
         latency_ms,
         pcm_len,
         sample_rate,
-        stt_impl,
+        (stt_impl, crate::whisper::Accel::Unknown.as_str()),
         requested_language,
         max_chars_per_second_from_env(),
     )
@@ -403,7 +417,7 @@ fn map_cloud_result_with_max_cps(
     latency_ms: u64,
     pcm_len: usize,
     sample_rate: u32,
-    stt_impl: &str,
+    (stt_impl, stt_accel): (&str, &str),
     requested_language: Option<&str>,
     max_chars_per_second: f64,
 ) -> TranscribeResult {
@@ -445,7 +459,7 @@ fn map_cloud_result_with_max_cps(
         is_hallucination: hallucinated,
         gate: None,
         stt_impl: stt_impl.to_owned(),
-        stt_accel: crate::whisper::Accel::Unknown.as_str().to_owned(),
+        stt_accel: stt_accel.to_owned(),
         // Cloud STT does not surface a distinct raw_text or a
         // language probability -- both fields fall through to the
         // session's own fallback (raw_text <- source_text at event
@@ -462,6 +476,7 @@ pub struct CloudTranscribeBackend {
     config: CloudTranscribeConfig,
     provider: String,
     nemotron_mode: bool,
+    hviske_ready: bool,
     /// Per-utterance profile overrides, live-reloading prompt and
     /// session-bound guards -- see [`ProfileOverrideSlots`] for the
     /// contract. The reloading prompt treats `config.prompt` as the BASE
@@ -496,6 +511,7 @@ impl CloudTranscribeBackend {
             config,
             provider,
             nemotron_mode,
+            hviske_ready: false,
             overrides: ProfileOverrideSlots::new(
                 "cloud STT backend model is stamped at construction",
             ),
@@ -597,8 +613,19 @@ impl CloudTranscribeBackend {
         &self.config
     }
 
+    #[cfg(native_session)]
+    pub(crate) fn startup_accel(&self) -> &'static str {
+        if self.hviske_ready {
+            hviske_local::DEVICE
+        } else {
+            crate::whisper::Accel::Unknown.as_str()
+        }
+    }
+
     pub fn stt_impl(&self) -> &'static str {
-        if self.nemotron_mode {
+        if self.hviske_ready {
+            crate::dictate::provenance::STT_IMPL_HVISKE_LOCAL
+        } else if self.nemotron_mode {
             crate::dictate::provenance::STT_IMPL_CLOUD_NEMOTRON
         } else {
             crate::dictate::provenance::cloud_stt_impl_for_base_url(&self.config.base_url)
@@ -648,7 +675,12 @@ impl TranscribeBackend for CloudTranscribeBackend {
         } else {
             self.effective_prompt()
         };
-        let request_language = self.request_language();
+        let local_hviske = LocalModel::from_alias(&self.config.model).is_some();
+        let request_language = if local_hviske {
+            None // The loopback service uses Danish and accepts no language hint.
+        } else {
+            self.request_language()
+        };
         let started = Instant::now();
         let request = CloudTranscriptionRequest::new(
             &self.config.base_url,
@@ -659,35 +691,34 @@ impl TranscribeBackend for CloudTranscribeBackend {
             prompt.as_deref(),
             self.config.timeout_ms,
         );
-        let result = if self.nemotron_mode {
-            let provider = if self.provider.is_empty() {
-                "nemotron"
-            } else {
-                self.provider.as_str()
-            };
-            cloud_transcribe_for_provider(provider, request)
+        let provider = if self.nemotron_mode && self.provider.is_empty() {
+            "nemotron"
         } else {
-            cloud_transcribe(
-                &self.config.base_url,
-                &self.config.api_key,
-                &self.config.model,
-                &wav,
-                request_language.as_deref(),
-                prompt.as_deref(),
-                self.config.timeout_ms,
-            )
-        }
-        .map_err(|e| TranscribeError::Backend(format!("cloud transcription failed: {e:#}")))?;
+            &self.provider
+        };
+        let result = cloud_transcribe_for_provider(provider, request).map_err(|error| {
+            let message = if local_hviske {
+                format!("{error:#}")
+            } else {
+                format!("cloud transcription failed: {error:#}")
+            };
+            TranscribeError::Backend(message)
+        })?;
         let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
         let mut result = map_cloud_result_with_max_cps(
             result,
             latency_ms,
             pcm.len(),
             sample_rate,
-            // Sniffed from the LIVE base URL, not from `stt_backend` --
-            // which spells `openai` for Groq too, so the setting alone
-            // cannot tell the two providers apart.
-            self.stt_impl(),
+            if local_hviske {
+                // The transport verified the model and CUDA device in this response.
+                (
+                    crate::dictate::provenance::STT_IMPL_HVISKE_LOCAL,
+                    hviske_local::DEVICE,
+                )
+            } else {
+                (self.stt_impl(), crate::whisper::Accel::Unknown.as_str())
+            },
             request_language.as_deref(),
             guards.max_chars_per_second,
         );

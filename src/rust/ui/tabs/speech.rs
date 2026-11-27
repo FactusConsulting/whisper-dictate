@@ -169,7 +169,6 @@ impl WhisperDictateApp {
                         "Cloud transcription provider. OpenAI and Groq use the OpenAI-compatible HTTP API; Nemotron uses Riva gRPC for local and hosted streaming transcription.",
                     );
                 }
-                self.local_only_blocks_cloud_note(ui, palette, mode, backend);
                 // Commit the provider change immediately (not after the closure)
                 // so the dependent model/URL/key widgets AND the Save/Test action
                 // buttons below all operate on the just-selected provider in the
@@ -185,12 +184,10 @@ impl WhisperDictateApp {
                 let mut nemotron_profile_selected = false;
                 if setting_visible(mode, "stt_model") {
                     if provider == CloudProvider::Custom {
-                        text_enabled(
+                        self.custom_model_field(
                             ui,
                             backend == SttBackendMode::Cloud,
-                            "Cloud STT model",
-                            &mut self.settings.stt_model,
-                            "Model id your self-hosted OpenAI-compatible server expects, for example Systran/faster-whisper-large-v3.",
+                            &stt_model_before,
                         );
                         self.hviske_model_options(ui, backend == SttBackendMode::Cloud);
                     } else if provider == CloudProvider::Nemotron {
@@ -231,6 +228,10 @@ impl WhisperDictateApp {
                         );
                     }
                 }
+                let local_hviske = self.local_hviske_model().is_some();
+                if !local_hviske {
+                    self.local_only_blocks_cloud_note(ui, palette, mode, backend);
+                }
                 let stt_model_after_picker = self.settings.stt_model.clone();
                 let stt_model_changed = stt_model_before != stt_model_after_picker;
                 let mut messages = Vec::new();
@@ -270,12 +271,14 @@ impl WhisperDictateApp {
                     self.settings_status = message.clone();
                     self.append_runtime_log(format!("[ui] {message}"));
                 }
-                if stt_base_url_visible(
-                    mode,
-                    provider,
-                    &self.settings.stt_model,
-                    &self.settings.stt_base_url,
-                ) {
+                if !local_hviske
+                    && stt_base_url_visible(
+                        mode,
+                        provider,
+                        &self.settings.stt_model,
+                        &self.settings.stt_base_url,
+                    )
+                {
                     text_enabled(
                         ui,
                         backend == SttBackendMode::Cloud,
@@ -300,7 +303,11 @@ impl WhisperDictateApp {
                         "Network timeout for cloud transcription requests.",
                     );
                 }
-                if setting_visible(mode, "stt_api_key") {
+                if local_hviske {
+                    if backend == SttBackendMode::Cloud {
+                        self.local_hviske_test_row(ui);
+                    }
+                } else if setting_visible(mode, "stt_api_key") {
                     if nemotron_in_process {
                         ui.label("API key");
                         ui.label("Not required for in-process Nemotron");
@@ -342,8 +349,9 @@ impl WhisperDictateApp {
                 || whisper_entry
                     .is_some_and(|entry| self.whisper_model_fits(entry.required_gpu_mib())));
         let nemotron_device_available = nemotron_in_process && self.selected_nemotron_model_fits();
-        let fixed_danish = backend == SttBackendMode::Whisper
-            && whisper_entry.and_then(|entry| entry.fixed_language) == Some("da");
+        let fixed_danish = (backend == SttBackendMode::Whisper
+            && whisper_entry.and_then(|entry| entry.fixed_language) == Some("da"))
+            || (backend == SttBackendMode::Cloud && self.local_hviske_model().is_some());
         scope_group(
             ui,
             palette,
@@ -612,6 +620,24 @@ impl WhisperDictateApp {
             options.push((saved.to_owned(), format!("{saved} (saved)")));
         }
         options
+    }
+
+    fn local_hviske_test_row(&mut self, ui: &mut egui::Ui) {
+        ui.label("");
+        ui.horizontal(|ui| {
+            if ui
+                .add_enabled(
+                    self.local_hviske_can_test(),
+                    egui::Button::new("Test local GPU service"),
+                )
+                .on_hover_text("Checks the selected CUDA model without sending microphone audio.")
+                .clicked()
+            {
+                self.run_cloud_api_check();
+            }
+            self.test_cloud_api_indicator(ui);
+        });
+        ui.end_row();
     }
 
     fn cloud_stt_key_section(&mut self, ui: &mut egui::Ui, provider: CloudProvider) {

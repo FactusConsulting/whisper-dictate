@@ -319,14 +319,15 @@ pub(super) fn load_stt_api_key_state(provider: CloudProvider) -> Result<(String,
     ))
 }
 
+/// Return the post key, its display status, and whether it came from the STT environment.
 pub(super) fn load_post_api_key_state(
     provider: Option<PostProvider>,
-) -> Result<(String, String, String)> {
+) -> Result<(String, String, bool)> {
     let Some(provider) = provider else {
         return Ok((
             String::new(),
-            String::new(),
             "Post processor is local or disabled; no post API key needed.".to_owned(),
+            false,
         ));
     };
     let key = load_post_api_key(provider)?;
@@ -335,24 +336,24 @@ pub(super) fn load_post_api_key_state(
             "Loaded saved {} API key from credential store.",
             provider.label()
         );
-        return Ok((key.clone(), key, status));
+        return Ok((key, status, false));
     }
 
-    if let Some(env_key) = load_post_api_key_from_env(provider) {
+    if let Some((env_key, from_stt)) = load_post_api_key_from_env(provider) {
         let status = format!(
             "Loaded {} API key from environment. Save post API key to store it.",
             provider.label()
         );
-        return Ok((env_key.clone(), env_key, status));
+        return Ok((env_key, status, from_stt));
     }
 
     Ok((
-        String::new(),
         String::new(),
         format!(
             "No {} API key saved. The worker can fall back to the Cloud STT key if one is loaded.",
             provider.label()
         ),
+        false,
     ))
 }
 
@@ -371,7 +372,7 @@ pub(super) fn load_stt_api_key_from_env(provider: CloudProvider) -> Option<Strin
         .find(|value| !value.is_empty())
 }
 
-pub(super) fn load_post_api_key_from_env(provider: PostProvider) -> Option<String> {
+pub(super) fn load_post_api_key_from_env(provider: PostProvider) -> Option<(String, bool)> {
     let candidates: &[&str] = match provider {
         PostProvider::Groq => &[
             "VOICEPI_POST_API_KEY",
@@ -384,11 +385,11 @@ pub(super) fn load_post_api_key_from_env(provider: PostProvider) -> Option<Strin
             "OPENAI_API_KEY",
         ],
     };
-    candidates
-        .iter()
-        .filter_map(|name| env::var(name).ok())
-        .map(|value| value.trim().to_owned())
-        .find(|value| !value.is_empty())
+    candidates.iter().find_map(|&name| {
+        let value = env::var(name).ok()?;
+        let value = value.trim();
+        (!value.is_empty()).then(|| (value.to_owned(), name == STT_API_KEY_ENV))
+    })
 }
 
 pub(super) fn save_stt_api_key(provider: CloudProvider, secret: &str) -> Result<SecretSaveReport> {

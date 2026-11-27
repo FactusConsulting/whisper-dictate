@@ -38,7 +38,9 @@
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
-use crate::dictate::backends::cloud_transcribe::{STT_BACKEND_CLOUD, STT_MODEL_ENV};
+use crate::dictate::backends::cloud_transcribe::{
+    cloud_backend_local_only_checked_with_provider, STT_BACKEND_CLOUD, STT_MODEL_ENV,
+};
 use crate::dictate::backends::whisper_local::WhisperBackendConfig;
 #[cfg(feature = "nemotron-local")]
 use crate::dictate::backends::NemotronLocalTranscribeBackend;
@@ -246,12 +248,9 @@ fn parse_command_hook_timeout(raw: Option<&str>) -> u64 {
 /// * **Local** -- `whisper.cpp` plus the Vulkan plan. The model loads
 ///   lazily, and each inference state must confirm Vulkan initialization
 ///   before decoding.
-/// * **Cloud** -- the provider sniffed from the live base URL, and
-///   `unknown` for the accelerator. The local whisper.cpp GPU plan says
-///   nothing about a remote provider's compute path, and reporting it
-///   would announce `impl=cloud-openai accel=vulkan` on a Vulkan build
-///   while the utterance records for that same session correctly say
-/// `unknown`. rust_session_real_backends.rs:287.
+/// * **Cloud** -- hosted endpoints report their provider and an unknown
+///   accelerator. On-this-PC Hviske reports its model implementation and CUDA
+///   only after the fixed loopback service passes startup health.
 fn startup_provenance_for(
     transcribe: &ProductionTranscribeBackend<WhisperLocalTranscribeBackend>,
 ) -> (&'static str, &'static str) {
@@ -260,9 +259,7 @@ fn startup_provenance_for(
             crate::dictate::provenance::STT_IMPL_WHISPER_CPP,
             crate::whisper::accel::global().resolved().as_str(),
         ),
-        ProductionTranscribeBackend::Cloud(cloud) => {
-            (cloud.stt_impl(), crate::whisper::Accel::Unknown.as_str())
-        }
+        ProductionTranscribeBackend::Cloud(cloud) => (cloud.stt_impl(), cloud.startup_accel()),
         #[cfg(feature = "nemotron-local")]
         ProductionTranscribeBackend::NemotronLocal(_) => (
             crate::dictate::provenance::STT_IMPL_NEMOTRON_LOCAL,
@@ -420,6 +417,8 @@ pub(crate) fn make_real_session_with_activity_and_settings(
             .stt_backend
             .trim()
             .eq_ignore_ascii_case(STT_BACKEND_CLOUD)
+            && crate::cloud_api::hviske_local::LocalModel::from_alias(&settings.stt_model)
+                .is_none()
             && crate::cloud_api::is_nemotron_provider(&stt_provider)
             && crate::cloud_api::is_nemotron_in_process_endpoint(&settings.stt_base_url);
         let transcribe = if nemotron_in_process {
@@ -464,18 +463,11 @@ pub(crate) fn make_real_session_with_activity_and_settings(
                 || {
                     let config =
                         CloudTranscribeConfig::from_env_with_provider(&lookup, &stt_provider);
-                    let backend = crate::dictate::CloudTranscribeBackend::new_with_provider(
+                    cloud_backend_local_only_checked_with_provider(
+                        settings.local_only,
                         config,
                         &stt_provider,
-                    );
-                    crate::privacy::assert_local_backend(
-                        settings.local_only,
-                        STT_BACKEND_CLOUD,
-                        "STT",
-                        Some(&backend.config().base_url),
                     )
-                    .map_err(|e| format!("{e:#}"))
-                    .map(|_| backend)
                     .map(|backend| {
                         backend
                             .with_reloading_prompt_settings(dictionary_settings.clone())
@@ -588,14 +580,10 @@ pub(crate) fn make_real_session_with_activity_and_settings(
         // diagnostic log answers "which code path serves my dictation"
         // without having to correlate a `[runtime] Phase B ...` line
         // against a supervisor starting line and guess.
-        // `stt_impl` comes from the backend we just CONSTRUCTED, so it
-        // cannot disagree with what runs; `accel` is the plan (see
-        // `startup_provenance_line`) stamped from the GPU policy here.
+        // The constructed backend supplies its provider/accelerator verdict.
         let session_config = session_config_with(&lookup);
         if matches!(transcribe, ProductionTranscribeBackend::Local(_)) {
-            // Only meaningful on the local path: the GPU policy governs
-            // whisper.cpp, and a cloud session has no local model to plan
-            // for (its banner reports `accel=unknown`).
+            // The Vulkan policy applies only to whisper.cpp.
             //
             // This CLEARS any previous session's observation as well as
             // stamping the plan: this session's model is not loaded yet,

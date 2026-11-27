@@ -269,9 +269,8 @@ jobs:
       - name: actionlint
         run: docker run --rm -v "${{ github.workspace }}:/workspace" -w /workspace "${{ steps.actionlint_image.outputs.image }}" -color
 
-  # Sonar analysis over the reports the rust-features cells already produce:
-  # LCOV from the Linux shipping test run and the clippy JSON from the Linux
-  # clippy cell, so Sonar costs no build of its own. Not a required check.
+  # Sonar analysis imports Rust LCOV and Python Cobertura from the Linux
+  # shipping cell, plus JSON from the Linux clippy cell. Not a required check.
   # Forks get no SONAR_TOKEN, and the release's workflow_call passes no
   # secrets, so the scan runs only where the token is present.
   sonar:
@@ -300,6 +299,10 @@ jobs:
         if: env.SONAR_TOKEN != ''
         with:
           name: sonar-clippy
+      - uses: actions/download-artifact@v8
+        if: env.SONAR_TOKEN != ''
+        with:
+          name: sonar-python-coverage
       - name: SonarQube Scan
         if: env.SONAR_TOKEN != ''
         uses: SonarSource/sonarqube-scan-action@v8
@@ -481,6 +484,22 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential cmake clang libclang-dev libssl-dev pkg-config jq libdbus-1-dev libwayland-dev libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libxi-dev libxtst-dev libasound2-dev
+      - name: Hviske service tests with coverage
+        if: env.RUN_RUST == 'true' && runner.os == 'Linux' && matrix.profile.id == 'shipping'
+        env:
+          COVERAGE_RCFILE: scripts/hviske/.coveragerc
+        run: |
+          sudo apt-get install -y --no-install-recommends python3-coverage
+          /usr/bin/python3 -m coverage run -m unittest discover -s scripts/hviske
+          /usr/bin/python3 -m coverage xml -o hviske-coverage.xml
+      - name: Upload the Hviske service coverage report
+        if: env.RUN_RUST == 'true' && runner.os == 'Linux' && matrix.profile.id == 'shipping'
+        uses: actions/upload-artifact@v7
+        with:
+          name: sonar-python-coverage
+          path: hviske-coverage.xml
+          if-no-files-found: error
+          retention-days: 1
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
         if: env.RUN_RUST == 'true'
         with:

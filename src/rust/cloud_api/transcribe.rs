@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use serde::Serialize;
 use serde_json::Value;
 
-use super::{grpc, grpc_transcribe};
+use super::{grpc, grpc_transcribe, hviske_local};
 use crate::cloud_api::http::{check_status, http_error, platform_tls_agent, USER_AGENT};
 
 pub const GROQ_TRANSCRIPTION_PROMPT_LIMIT: usize = 896;
@@ -120,7 +120,6 @@ pub struct CloudTranscriptionResult {
 /// lets the legacy helper remain protocol-neutral without growing an
 /// eight-argument function that fails the strict clippy profile.
 pub(crate) struct CloudTranscriptionRequest<'a> {
-    provider: Option<String>,
     base_url: &'a str,
     api_key: &'a str,
     model: &'a str,
@@ -141,7 +140,6 @@ impl<'a> CloudTranscriptionRequest<'a> {
         timeout_ms: u64,
     ) -> Self {
         Self {
-            provider: None,
             base_url,
             api_key,
             model,
@@ -150,11 +148,6 @@ impl<'a> CloudTranscriptionRequest<'a> {
             prompt,
             timeout_ms,
         }
-    }
-
-    pub(crate) fn for_provider(mut self, provider: &str) -> Self {
-        self.provider = Some(provider.to_owned());
-        self
     }
 }
 
@@ -167,9 +160,14 @@ pub fn handle_cloud_transcribe(
     prompt: Option<&str>,
     timeout_ms: u64,
 ) -> Result<()> {
+    let api_key = if hviske_local::LocalModel::from_alias(model).is_some() {
+        String::new()
+    } else {
+        resolve_api_key(api_key, base_url)
+    };
     let result = cloud_transcribe(
         base_url,
-        api_key,
+        &api_key,
         model,
         &std::fs::read(audio_wav_path)?,
         language,
@@ -189,25 +187,27 @@ pub fn cloud_transcribe(
     prompt: Option<&str>,
     timeout_ms: u64,
 ) -> Result<CloudTranscriptionResult> {
-    cloud_transcribe_inner(CloudTranscriptionRequest::new(
-        base_url, api_key, model, audio_wav, language, prompt, timeout_ms,
-    ))
+    cloud_transcribe_inner(
+        None,
+        CloudTranscriptionRequest::new(
+            base_url, api_key, model, audio_wav, language, prompt, timeout_ms,
+        ),
+    )
 }
 
 /// Transcribe with the selected cloud provider attached to the request path.
-/// The public legacy helper intentionally has no provider argument and stays
-/// on the HTTP protocol; in-process sessions call this variant so a custom or
-/// OpenAI endpoint on port 50051 cannot be mistaken for Nemotron Riva.
+/// Hosted calls through the public helper stay on HTTP; in-process sessions
+/// call this variant so a custom endpoint is not mistaken for Nemotron Riva.
 pub(crate) fn cloud_transcribe_for_provider(
     provider: &str,
     request: CloudTranscriptionRequest<'_>,
 ) -> Result<CloudTranscriptionResult> {
-    cloud_transcribe_inner(request.for_provider(provider))
+    cloud_transcribe_inner(Some(provider), request)
 }
 
 fn cloud_transcribe_inner(
+    provider: Option<&str>,
     CloudTranscriptionRequest {
-        provider,
         base_url,
         api_key,
         model,
@@ -217,6 +217,11 @@ fn cloud_transcribe_inner(
         timeout_ms,
     }: CloudTranscriptionRequest<'_>,
 ) -> Result<CloudTranscriptionResult> {
+    if let Some(local_model) = hviske_local::LocalModel::from_alias(model) {
+        hviske_local::require_custom_provider(provider.unwrap_or_default())?;
+        return hviske_local::transcribe(local_model, audio_wav, timeout_ms);
+    }
+
     let loopback = crate::privacy::is_loopback_url(base_url);
     if api_key.trim().is_empty() && !loopback {
         return Err(anyhow!(
@@ -243,10 +248,7 @@ fn cloud_transcribe_inner(
     // otherwise surface only the opaque `http: invalid format` error. A
     // Nemotron provider with a non-gRPC URL is rejected explicitly instead of
     // silently sending Riva settings to an OpenAI-compatible multipart route.
-    if let Some(provider) = provider
-        .as_deref()
-        .filter(|p| grpc::is_nemotron_provider(p))
-    {
+    if let Some(provider) = provider.filter(|p| grpc::is_nemotron_provider(p)) {
         if !should_use_nemotron_grpc(Some(provider), base_url) {
             return Err(anyhow!(
                 "Nemotron requires a Riva gRPC endpoint; use grpc://localhost:50051 locally or https://grpc.nvcf.nvidia.com:443 for hosted NVCF"
@@ -262,7 +264,7 @@ fn cloud_transcribe_inner(
     let (language, prompt) = if hviske {
         // These Danish-only endpoints use the decoder prompt for control
         // tokens. Sending ordinary text can replace those required tokens.
-        (Some("da"), None)
+        (Some(hviske_local::LANGUAGE), None)
     } else {
         (language, prompt)
     };
@@ -302,7 +304,7 @@ fn cloud_transcribe_inner(
         .map_err(|err| anyhow!("cloud transcription returned invalid JSON: {err}"))?;
     let mut result = parse_transcription_response(&body)?;
     if hviske {
-        result.language = Some("da".to_owned());
+        result.language = Some(hviske_local::LANGUAGE.to_owned());
     }
     Ok(result)
 }

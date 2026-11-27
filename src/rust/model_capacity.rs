@@ -54,6 +54,9 @@ pub(crate) fn whisper_gpus() -> Vec<SpeechGpu> {
     }
 }
 
+mod hviske_cuda;
+pub(crate) use hviske_cuda::hviske_cuda_total_mib;
+
 #[cfg(any(feature = "whisper-rs-vulkan", feature = "nemotron-local"))]
 pub(crate) mod vulkan;
 

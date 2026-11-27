@@ -532,14 +532,16 @@ impl WhisperDictateApp {
 
     pub(in crate::ui) fn reload_post_api_key(&mut self) {
         match load_post_api_key_state(PostProvider::from_settings(&self.settings)) {
-            Ok((key, saved_key, status)) => {
+            Ok((key, status, from_stt_fallback)) => {
+                self.saved_post_api_key_input = key.clone();
                 self.post_api_key_input = key;
-                self.saved_post_api_key_input = saved_key;
+                self.post_api_key_from_stt_fallback = from_stt_fallback;
                 self.post_api_key_status = status;
             }
             Err(err) => {
                 self.post_api_key_input.clear();
                 self.saved_post_api_key_input.clear();
+                self.post_api_key_from_stt_fallback = false;
                 self.post_api_key_status = format!("Could not load post-processing API key: {err}");
             }
         }
@@ -719,10 +721,12 @@ impl WhisperDictateApp {
 
     pub(in crate::ui) fn save_post_api_key_now(&mut self) {
         let prior_saved_key = self.saved_post_api_key_input.clone();
+        let prior_stt_fallback = self.post_api_key_from_stt_fallback;
         self.post_api_key_status = self.save_post_api_key_message();
         self.restart_after_credential_change(
             "cloud post-processing",
-            prior_saved_key != self.saved_post_api_key_input,
+            prior_saved_key != self.saved_post_api_key_input
+                || prior_stt_fallback != self.post_api_key_from_stt_fallback,
         );
     }
 
@@ -752,6 +756,7 @@ impl WhisperDictateApp {
             Ok(report) => {
                 let log_details = report.log_details();
                 self.saved_post_api_key_input = self.post_api_key_input.clone();
+                self.post_api_key_from_stt_fallback = false;
                 let message = if self.post_api_key_input.trim().is_empty() {
                     format!("Cleared saved {} API key.", provider.label())
                 } else {
